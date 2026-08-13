@@ -18,11 +18,11 @@ Code review 用于确认变更正确实现当前需求，不破坏产品约束�
 
 1. 检查 `git --version`。OpenCodeReview 官方支持基线为 Git 2.41；更低版本即使部分命令可用，也不视为完整支持。
 2. 首次使用 OCR 自身的 LLM 时，执行 `npx ocr config provider` 和 `npx ocr config model`；也可直接使用不需要 OCR LLM 凭据的 delegation 模式。
-3. 确认审查边界：记录需求、验收条件、起始 commit，并识别工作区中与本次需求无关的既有改动。
+3. 确认审查边界：记录需求和验收条件，并固定一组后续命令都复用的 `<targetArgs>`：未提交工作区使用空参数，单个 commit 使用 `--commit <sha>`，分支变更使用 `--from <base> --to <head>`。工作区存在无关改动时，不得使用默认工作区模式。
 4. 先完成与改动范围匹配的测试，至少执行 `npm test` 和 `npm run build`。通过命令不等于已通过审查。
-5. 执行 `npm run review:preview`，检查 OpenCodeReview 选取和排除的文件是否符合本次边界。
-6. 已配置 OCR LLM 时执行 `npm run review -- --background "<需求与验收条件>"`。凭据只保存在用户环境或 `~/.opencodereview/`，不写入仓库。
-7. 未配置 OCR LLM 时使用官方 delegation 模式：执行 `npm run review:delegate` 获取文件清单，再执行 `npm run review:rules -- <file1> <file2> ...` 获取适用规则，由当前编码 Agent 对这些文件完成审查。
+5. 执行 `npm run review:preview -- <targetArgs>`，检查 OpenCodeReview 选取和排除的文件是否符合本次边界。
+6. 已配置 OCR LLM 时执行 `npm run review -- <targetArgs> --background "<需求与验收条件>"`。凭据只保存在用户环境或 `~/.opencodereview/`，不写入仓库。
+7. 未配置 OCR LLM 时使用官方 delegation 模式：执行 `npm run review:delegate -- <targetArgs>` 获取文件清单，再执行 `npm run review:rules -- <file1> <file2> ...` 获取适用规则，由当前编码 Agent 对这些文件完成审查。
 8. 逐条处理发现：修复真实问题；对误报给出可核验的排除依据；对暂不处理的非阻断项记录风险和负责人。
 9. 修复后重新执行受影响测试和 code review。在当前 GitHub Issue 中记录命令、结果、修复和剩余风险。
 
@@ -81,7 +81,7 @@ Code review 用于确认变更正确实现当前需求，不破坏产品约束�
 
 - 范围：`<base>...<head>` 或工作区文件列表
 - 需求背景：<issue / 验收条件>
-- 命令：`npm run review:preview`；`npm run review -- --background "..."` 或 delegation 命令
+- 命令：`npm run review:preview -- <targetArgs>`；`npm run review -- <targetArgs> --background "..."` 或 delegation 命令
 - 结果：<P0/P1/P2/P3 数量与摘要>
 - 处置：<已修复项和误报排除依据>
 - 验证：<测试、构建、运行时或人工检查证据>
