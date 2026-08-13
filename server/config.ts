@@ -12,6 +12,7 @@ const envSchema = z.object({
   DASHSCOPE_TRANSLATION_MODEL: z
     .string()
     .default("qwen3.5-livetranslate-flash-realtime"),
+  DASHSCOPE_ASR_MODEL: z.string().default("qwen3-asr-flash-realtime"),
   HOST: z.string().default("127.0.0.1"),
   PORT: z.coerce.number().int().positive().default(8787),
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
@@ -29,13 +30,13 @@ export function getDashScopeHttpOrigin() {
   return `https://${workspaceId}.${config.DASHSCOPE_REGION}.maas.aliyuncs.com`;
 }
 
-/** Returns the workspace-specific realtime translation WebSocket URL. */
-export function getTranslationWebSocketUrl() {
+/** Returns a workspace-specific realtime WebSocket URL for the selected model. */
+export function getRealtimeWebSocketUrl(model: string) {
   const workspaceId = config.DASHSCOPE_WORKSPACE_ID;
   if (!workspaceId) {
     return undefined;
   }
 
   const origin = `wss://${workspaceId}.${config.DASHSCOPE_REGION}.maas.aliyuncs.com`;
-  return `${origin}/api-ws/v1/realtime?model=${encodeURIComponent(config.DASHSCOPE_TRANSLATION_MODEL)}`;
+  return `${origin}/api-ws/v1/realtime?model=${encodeURIComponent(model)}`;
 }

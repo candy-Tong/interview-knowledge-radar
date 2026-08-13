@@ -1,14 +1,15 @@
 # Interview Knowledge Radar
 
-Interview Knowledge Radar 是本地优先的实时面试辅助工具。Chrome 只采集用户主动共享的系统音频，Node.js 服务代理阿里云英文识别与中文同传，再用 PostgreSQL 中的 BM25 和 pgvector 从本地知识库召回完整答案。
+Interview Knowledge Radar 是本地优先的实时面试辅助工具。Chrome 只采集用户主动共享的系统音频；翻译模式通过阿里云实时翻译输出英文原文与中文同传，普通模式通过独立实时 ASR 只输出原始转写。两种模式都会用 PostgreSQL 中的 BM25 和 pgvector 从本地知识库召回完整答案。
 
 ## 核心能力
 
-- **系统音频同传**：只使用 Chrome 屏幕/窗口/标签页共享，不请求麦克风。
+- **翻译/普通双模式**：翻译模式调用 LiveTranslate，普通模式只调用 Qwen3-ASR-Realtime，不产生翻译请求。
+- **系统音频采集**：只使用 Chrome 屏幕/窗口/标签页共享，不请求麦克风。
 - **5 秒问题合并**：连续 ASR 片段合并为一条面试官问题，静音超过 5 秒才开始下一条。
 - **混合检索**：BM25 词法召回和 1024 维向量召回通过 RRF 排序，每次最多返回 2 条知识。
 - **完整知识展示**：一份知识源 Markdown 对应一条知识，正文不切分。
-- **相关句定位**：长知识自动滚动到与英文问题最相关的句子，并保留全文滚动能力。
+- **相关句定位**：长知识自动滚动到与识别问题最相关的句子，并保留全文滚动能力。
 - **历史问题切换**：点击左侧任意面试官语句，切换到该问题绑定的检索结果。
 - **知识库总览**：顶部 Tab 可查看全部完整知识，并用英文问题模拟真实混合检索。
 - **固定单屏布局**：面试页为转写、知识一、知识二三栏，页面本身不滚动，各内容区独立滚动。
@@ -18,8 +19,10 @@ Interview Knowledge Radar 是本地优先的实时面试辅助工具。Chrome �
 ```mermaid
 flowchart LR
   A[Chrome 共享系统音频] -->|16 kHz PCM| B[本地 Node.js WebSocket 代理]
-  B -->|服务端凭据| C[阿里云实时识别与中文同传]
-  C --> D[5 秒窗口合并英文问题]
+  B -->|翻译模式| C[LiveTranslate 英文识别与中文同传]
+  B -->|普通模式| J[Qwen3-ASR 原始语音识别]
+  C --> D[5 秒窗口合并识别结果]
+  J --> D
   D --> E[BM25 词法召回]
   D --> F[阿里云生成查询向量]
   F --> G[pgvector 语义召回]
@@ -71,12 +74,13 @@ npm run dev
 ## 使用方式
 
 1. 打开页面，等待右上角数据库、阿里云和本地 RAG 状态就绪。
-2. 点击“监听系统音频”。
-3. 在 Chrome 弹窗中选择正在播放面试声音的屏幕、窗口或标签页，并开启“同时分享系统音频”。
-4. 面试官英文问题会显示在左栏，中文同传显示在同一行下方。
-5. 中栏和右栏展示最多两条完整知识，并自动滚动到相关句。
-6. 点击左侧历史问题可切换对应知识；点击“知识库总览”可查看所有完整知识。
-7. 在知识库搜索框输入英文面试问题，按回车或点击“搜索”，即可模拟实时问答使用的混合检索。
+2. 在右上角选择“翻译模式”或“普通模式”；监听期间模式会锁定。
+3. 点击“监听系统音频”。
+4. 在 Chrome 弹窗中选择正在播放面试声音的屏幕、窗口或标签页，并开启“同时分享系统音频”。
+5. 翻译模式显示英文原文和中文同传；普通模式只显示 ASR 原始转写，不调用翻译模型。
+6. 中栏和右栏展示最多两条完整知识，并自动滚动到相关句。
+7. 点击左侧历史问题可切换对应知识；点击“知识库总览”可查看所有完整知识。
+8. 在知识库搜索框输入英文面试问题，按回车或点击“搜索”，即可模拟实时问答使用的混合检索。
 
 页面不会调用 `getUserMedia`。没有获取到系统音轨时会直接报错，不会回退到耳机或电脑麦克风。
 
@@ -109,6 +113,7 @@ npm run db:ingest:bm25
 | `DASHSCOPE_WORKSPACE_ID` | 用户配置 | 百炼业务空间 |
 | `DASHSCOPE_REGION` | `cn-beijing` / `ap-southeast-1` | Workspace 地域 |
 | `DASHSCOPE_TRANSLATION_MODEL` | `qwen3.5-livetranslate-flash-realtime` | 实时同传模型 |
+| `DASHSCOPE_ASR_MODEL` | `qwen3-asr-flash-realtime` | 普通模式实时语音识别模型 |
 | `DASHSCOPE_EMBEDDING_MODEL` | `text-embedding-v4` | 1024 维向量模型 |
 | `HOST` | `127.0.0.1` | Node.js 监听地址 |
 | `PORT` | `8787` | 页面、API 和 WebSocket 端口 |
@@ -136,11 +141,11 @@ npm run db:ingest:bm25
 | `GET /api/knowledge` | 返回知识总览的全部完整知识 |
 | `POST /api/knowledge/refresh` | 递归扫描目录并增量更新索引 |
 | `POST /api/search` | 最多返回两条混合检索结果 |
-| `WS /api/realtime` | 浏览器 PCM 与同传事件通道 |
+| `WS /api/realtime?mode=translation\|transcription` | 浏览器 PCM 与实时翻译/语音识别事件通道 |
 
 ## 隐私边界
 
-- 系统音频只有在用户通过 Chrome 授权后才会采集，并发送给阿里云实时同传。
+- 系统音频只有在用户通过 Chrome 授权后才会采集；翻译模式发送给 LiveTranslate，普通模式发送给独立 Qwen3-ASR-Realtime。
 - Markdown 原文、BM25 词项、向量和检索结果保存在本机 PostgreSQL。
 - 完整知识在导入时发送给阿里云生成向量；定稿英文问题在检索时发送给阿里云生成查询向量。
 - API Key 不进入前端包，由本地 Node.js 服务代理云端请求。

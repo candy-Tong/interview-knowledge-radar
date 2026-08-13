@@ -12,6 +12,11 @@ export enum ConsoleView {
   Knowledge = "knowledge",
 }
 
+export enum RealtimeMode {
+  Translation = "translation",
+  Transcription = "transcription",
+}
+
 export type KnowledgeDocument = {
   id: string;
   sourceName: string;
@@ -34,6 +39,7 @@ export type KnowledgeResult = {
 
 export type TranscriptSegment = {
   itemId: string;
+  mode: RealtimeMode;
   sourceText: string;
   translatedText: string;
   isSourceFinal: boolean;
@@ -46,6 +52,7 @@ export type TranscriptSegment = {
 export type ServiceHealth = {
   databaseReady: boolean;
   dashScopeReady: boolean;
+  asrModel: string;
   translationModel: string;
   embeddingModel: string;
 };

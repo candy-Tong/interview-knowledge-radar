@@ -7,7 +7,7 @@
 - Chrome 负责系统音频共享和界面展示。
 - Node.js 在 `127.0.0.1:8787` 提供静态页面、REST API 和 WebSocket 代理。
 - Docker 中的 PostgreSQL + pgvector 在 `localhost:54329` 保存完整知识、BM25 词项和向量。
-- Node.js 使用服务端 `.env` 中的凭据访问阿里云实时同传和 embedding 接口。
+- Node.js 使用服务端 `.env` 中的凭据访问阿里云实时翻译、实时 ASR 和 embedding 接口。
 
 部署完成后，用户访问 `http://127.0.0.1:8787`。所有命令均从项目根目录执行。
 
@@ -55,7 +55,7 @@
 | Docker | Docker Desktop 或 Docker Engine | 运行 PostgreSQL + pgvector |
 | Docker Compose | v2，使用 `docker compose` | 管理数据库容器和数据卷 |
 | Chrome | 最新稳定版 | 系统音频共享与页面运行 |
-| 阿里云百炼 | API Key、Workspace ID | 实时同传和 1024 维 embedding |
+| 阿里云百炼 | API Key、Workspace ID | 实时翻译、实时 ASR 和 1024 维 embedding |
 
 阿里云 Workspace 与 `DASHSCOPE_REGION` 必须属于同一地域。当前配置只接受：
 
@@ -115,6 +115,7 @@ DASHSCOPE_WORKSPACE_ID=由用户填写
 DASHSCOPE_REGION=cn-beijing
 DASHSCOPE_EMBEDDING_MODEL=text-embedding-v4
 DASHSCOPE_TRANSLATION_MODEL=qwen3.5-livetranslate-flash-realtime
+DASHSCOPE_ASR_MODEL=qwen3-asr-flash-realtime
 HOST=127.0.0.1
 PORT=8787
 ```
@@ -267,7 +268,8 @@ NODE
 4. 确认页面本身没有横向或纵向滚动，长知识只在各自卡片内滚动。
 5. 点击右上角“监听系统音频”。
 6. 用户在 Chrome 弹窗中选择屏幕、窗口或标签页，并开启“同时分享系统音频”。
-7. 播放一段英文问题，确认出现英文原文、中文同传和最多两条完整知识。
+7. 选择“翻译模式”并播放一段英文问题，确认出现英文原文、中文同传和最多两条完整知识。
+8. 结束会话后切换“普通模式”，确认只出现原始 ASR 转写，不显示中文同传，并仍返回最多两条知识。
 8. 确认静音超过 5 秒才生成下一行，相关知识自动滚动到高亮句。
 
 第 5～6 步需要真实用户手势和系统权限，Agent 不得绕过授权。页面不会请求麦克风。
@@ -334,7 +336,7 @@ docker compose down
 | `8787` 被占用 | `lsof -nP -iTCP:8787 -sTCP:LISTEN` | 复用已确认的实例或正常停止；不杀未知进程 |
 | WebSocket 返回 403 | 页面 URL 和 Origin | 只从 `localhost:5173` 或 `127.0.0.1:8787` 使用 |
 | 没有系统音轨 | Chrome 共享弹窗和 macOS 权限 | 勾选分享音频，允许“屏幕与系统音频录制” |
-| 同传连接中断 | 阿里云地域、Workspace、网络 | 修正配置后重新开始会话 |
+| 实时语音连接中断 | 阿里云地域、Workspace、网络 | 修正配置后重新开始会话 |
 
 ## 部署报告模板
 

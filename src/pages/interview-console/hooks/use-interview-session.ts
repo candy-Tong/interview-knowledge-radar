@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { KnowledgeResult, TranscriptSegment } from "../types";
-import { SessionPhase } from "../types";
+import { RealtimeMode, SessionPhase } from "../types";
 import {
   startSystemAudioCapture,
   type SystemAudioCapture,
@@ -14,7 +14,7 @@ type RealtimeEvent = {
   results?: KnowledgeResult[];
 };
 
-const emptySegment: Omit<TranscriptSegment, "itemId" | "createdAt"> = {
+const emptySegment: Omit<TranscriptSegment, "itemId" | "mode" | "createdAt"> = {
   sourceText: "",
   translatedText: "",
   isSourceFinal: false,
@@ -26,13 +26,14 @@ const emptySegment: Omit<TranscriptSegment, "itemId" | "createdAt"> = {
 function updateSegment(
   segments: TranscriptSegment[],
   itemId: string,
+  mode: RealtimeMode,
   patch: Partial<TranscriptSegment>,
 ) {
   const existingIndex = segments.findIndex((segment) => segment.itemId === itemId);
   if (existingIndex === -1) {
     return [
       ...segments,
-      { ...emptySegment, itemId, createdAt: Date.now(), ...patch },
+      { ...emptySegment, itemId, mode, createdAt: Date.now(), ...patch },
     ];
   }
   return segments.map((segment, index) =>
@@ -43,6 +44,7 @@ function updateSegment(
 /** Owns system-audio capture, the local proxy socket, and transcript/retrieval state. */
 export function useInterviewSession() {
   const [phase, setPhase] = useState(SessionPhase.Idle);
+  const [mode, setMode] = useState(RealtimeMode.Translation);
   const [segments, setSegments] = useState<TranscriptSegment[]>([]);
   const [audioSourceLabel, setAudioSourceLabel] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
@@ -93,11 +95,13 @@ export function useInterviewSession() {
         setPhase(SessionPhase.Listening);
         break;
       case "source.partial":
-        setSegments((values) => updateSegment(values, itemId, { sourceText: event.text ?? "" }));
+        setSegments((values) =>
+          updateSegment(values, itemId, mode, { sourceText: event.text ?? "" }),
+        );
         break;
       case "source.final":
         setSegments((values) =>
-          updateSegment(values, itemId, {
+          updateSegment(values, itemId, mode, {
             sourceText: event.text ?? "",
             isSourceFinal: true,
           }),
@@ -105,12 +109,12 @@ export function useInterviewSession() {
         break;
       case "translation.partial":
         setSegments((values) =>
-          updateSegment(values, itemId, { translatedText: event.text ?? "" }),
+          updateSegment(values, itemId, mode, { translatedText: event.text ?? "" }),
         );
         break;
       case "translation.final":
         setSegments((values) =>
-          updateSegment(values, itemId, {
+          updateSegment(values, itemId, mode, {
             translatedText: event.text ?? "",
             isTranslationFinal: true,
           }),
@@ -118,12 +122,12 @@ export function useInterviewSession() {
         break;
       case "knowledge.results":
         setSegments((values) =>
-          updateSegment(values, itemId, { knowledgeResults: event.results ?? [] }),
+          updateSegment(values, itemId, mode, { knowledgeResults: event.results ?? [] }),
         );
         break;
       case "knowledge.error":
         setSegments((values) =>
-          updateSegment(values, itemId, { knowledgeError: event.message }),
+          updateSegment(values, itemId, mode, { knowledgeError: event.message }),
         );
         break;
       case "session.finished":
@@ -131,15 +135,25 @@ export function useInterviewSession() {
         setPhase(SessionPhase.Idle);
         break;
       case "session.error":
-        setErrorMessage(event.message ?? "实时同传发生错误。 ");
+        setErrorMessage(event.message ?? "实时语音服务发生错误。 ");
         setPhase(SessionPhase.Error);
         break;
       case "session.disconnected":
-        setErrorMessage("实时同传连接意外中断。 ");
+        setErrorMessage("实时语音连接意外中断。 ");
         setPhase(SessionPhase.Error);
         break;
     }
-  }, []);
+  }, [mode]);
+
+  /** Changes the cloud processing mode only while no capture session is active. */
+  const handleModeChange = useCallback(
+    (value: RealtimeMode) => {
+      if ([SessionPhase.Idle, SessionPhase.Error].includes(phase)) {
+        setMode(value);
+      }
+    },
+    [phase],
+  );
 
   /** Requests system-audio permission, then connects to the protected realtime proxy. */
   const start = useCallback(async () => {
@@ -162,7 +176,10 @@ export function useInterviewSession() {
       setAudioSourceLabel(capture.label);
 
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const socket = new WebSocket(`${protocol}//${window.location.host}/api/realtime`);
+      const query = new URLSearchParams({ mode });
+      const socket = new WebSocket(
+        `${protocol}//${window.location.host}/api/realtime?${query.toString()}`,
+      );
       socket.binaryType = "arraybuffer";
       socket.onopen = () => {
         for (const chunk of queuedChunksRef.current) {
@@ -174,7 +191,7 @@ export function useInterviewSession() {
         handleRealtimeEvent(JSON.parse(message.data as string) as RealtimeEvent);
       };
       socket.onerror = () => {
-        setErrorMessage("无法连接本地同传服务。 ");
+        setErrorMessage("无法连接本地实时语音服务。 ");
         setPhase(SessionPhase.Error);
       };
       socketRef.current = socket;
@@ -182,7 +199,7 @@ export function useInterviewSession() {
       setErrorMessage(error instanceof Error ? error.message : "系统音频授权失败。 ");
       setPhase(SessionPhase.Error);
     }
-  }, [handleRealtimeEvent]);
+  }, [handleRealtimeEvent, mode]);
 
   const clear = useCallback(() => setSegments([]), []);
 
@@ -197,11 +214,13 @@ export function useInterviewSession() {
 
   return {
     phase,
+    mode,
     segments,
     audioSourceLabel,
     errorMessage,
     start,
     stop,
     clear,
+    setMode: handleModeChange,
   };
 }

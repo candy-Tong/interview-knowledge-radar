@@ -6,11 +6,13 @@
 - `useInterviewSession()` 拥有音频、WebSocket、转写和检索结果状态；页面不要复制该状态机。
 - `selectedSegmentId` 决定当前知识结果；新转写到达时默认选择最新一行，用户可点击历史行切换。
 - `ConsoleView` 只控制“面试辅助/知识库总览”局部视图，不需要路由或全局 store。
+- `RealtimeMode` 在 `useInterviewSession()` 中管理；只在空闲时切换，并作为 WebSocket query 固定本次会话上游。
 - 服务就绪需要数据库、阿里云配置、非空知识索引且 `vectors === chunks`。
 
 ## 数据契约
 
 - `TranscriptSegment` 是一个合并后的面试官 turn，不是单个 ASR fragment。
+- 每个 `TranscriptSegment` 保存产生它的 mode，历史行是否展示中文同传不能依赖当前全局 mode。
 - `KnowledgeResult` 包含完整正文、BM25/vector/RRF 信号和相关句偏移。
 - `KnowledgeDocument` 用于总览，返回完整正文但不需要检索分数。
 - 修改服务端事件或 API 字段时，先同步 `types.ts`，再更新 hook 和组件消费逻辑。
@@ -30,4 +32,3 @@
 - 新问题自动选中；点击旧问题切换对应知识。
 - body 尺寸不超过 viewport；每个长内容区域可以独立上下滚动。
 - 知识相关句进入视口且标记不改变原文字符顺序。
-

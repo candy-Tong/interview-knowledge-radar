@@ -11,7 +11,7 @@ Node 服务同时提供 REST API、生产静态文件和 `/api/realtime` WebSock
 - `GET /api/knowledge`：总览使用的全部完整知识。
 - `POST /api/knowledge/refresh`：递归扫描知识根目录，按内容哈希增量更新并返回统计。
 - `POST /api/search`：接收英文 `query`，`limit` 必须在 1 到 2 之间。
-- `WS /api/realtime`：二进制消息为 PCM；文本控制消息当前只有 `session.finish`。
+- `WS /api/realtime?mode=translation|transcription`：模式在握手时确定，二进制消息为 PCM；文本控制消息当前只有 `session.finish`。
 
 新增或修改接口时，同步更新前端 `types.ts`、调用方、错误状态和根目录开发文档。
 

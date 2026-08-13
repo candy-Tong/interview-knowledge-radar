@@ -10,6 +10,48 @@
   backdrop-filter: blur(18px);
 }
 
+.mode-switch {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid rgba(104, 87, 112, 0.15);
+  border-radius: 999px;
+  background: rgba(246, 241, 247, 0.72);
+}
+
+.mode-switch button {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 999px;
+  color: #8a7f8c;
+  background: transparent;
+  font-size: 8px;
+  font-weight: 700;
+  transition: color 150ms ease, background 150ms ease, box-shadow 150ms ease;
+}
+
+.mode-switch button.is-active {
+  color: #665778;
+  background: #eadff6;
+  box-shadow: 0 3px 9px rgba(125, 106, 170, 0.12);
+}
+
+.mode-switch button.is-active.is-transcription {
+  color: #46665f;
+  background: #d8eee8;
+  box-shadow: 0 3px 9px rgba(91, 153, 140, 0.12);
+}
+
+.mode-switch button:disabled {
+  cursor: not-allowed;
+  opacity: 0.72;
+}
+
 .capture-state {
   display: flex;
   min-width: 0;
@@ -95,5 +137,12 @@
   .capture-state small,
   .clear-button span {
     display: none;
+  }
+
+  .mode-switch button {
+    width: 25px;
+    padding-inline: 6px;
+    overflow: hidden;
+    white-space: nowrap;
   }
 }

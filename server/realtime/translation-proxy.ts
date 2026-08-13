@@ -1,8 +1,13 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import WebSocket, { WebSocketServer } from "ws";
-import { config, getTranslationWebSocketUrl } from "../config.js";
+import { config, getRealtimeWebSocketUrl } from "../config.js";
 import { maximumKnowledgeResults, searchKnowledge } from "../knowledge/search.js";
+
+export enum RealtimeMode {
+  Translation = "translation",
+  Transcription = "transcription",
+}
 
 type AliyunEvent = {
   type?: string;
@@ -17,7 +22,7 @@ type AliyunEvent = {
 
 type ClientEvent = { type?: string };
 
-type TranslationProxyOptions = {
+type RealtimeProxyOptions = {
   apiKey?: string;
   upstreamUrl?: string;
   search?: typeof searchKnowledge;
@@ -39,8 +44,25 @@ function sendJson(socket: WebSocket, payload: unknown) {
   }
 }
 
-/** Builds the text-only English-to-Chinese translation configuration. */
-function createSessionUpdate() {
+/** Builds the upstream session configuration for translation or transcription. */
+function createSessionUpdate(mode: RealtimeMode) {
+  if (mode === RealtimeMode.Transcription) {
+    return {
+      event_id: `event_${randomUUID().replaceAll("-", "")}`,
+      type: "session.update",
+      session: {
+        modalities: ["text"],
+        sample_rate: 16000,
+        input_audio_format: "pcm",
+        turn_detection: {
+          type: "server_vad",
+          threshold: 0.2,
+          silence_duration_ms: 800,
+        },
+      },
+    };
+  }
+
   return {
     event_id: `event_${randomUUID().replaceAll("-", "")}`,
     type: "session.update",
@@ -49,7 +71,7 @@ function createSessionUpdate() {
       sample_rate: 16000,
       input_audio_format: "pcm",
       input_audio_transcription: {
-        model: "qwen3-asr-flash-realtime",
+        model: config.DASHSCOPE_ASR_MODEL,
         language: "en",
       },
       translation: {
@@ -67,12 +89,37 @@ function createSessionUpdate() {
   };
 }
 
+/** Parses a client mode while preserving translation as the backward-compatible default. */
+function parseRealtimeMode(value: string | null) {
+  if (!value || value === RealtimeMode.Translation) {
+    return RealtimeMode.Translation;
+  }
+  if (value === RealtimeMode.Transcription) {
+    return RealtimeMode.Transcription;
+  }
+  return undefined;
+}
+
 /** Proxies browser PCM audio to Alibaba Cloud without exposing the API key. */
-export function createTranslationWebSocketServer(options: TranslationProxyOptions = {}) {
+export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}) {
   const socketServer = new WebSocketServer({ noServer: true });
 
-  socketServer.on("connection", (browserSocket) => {
-    const upstreamUrl = options.upstreamUrl ?? getTranslationWebSocketUrl();
+  socketServer.on("connection", (browserSocket, request) => {
+    const requestUrl = new URL(request.url ?? "/", "http://localhost");
+    const mode = parseRealtimeMode(requestUrl.searchParams.get("mode"));
+    if (!mode) {
+      sendJson(browserSocket, {
+        type: "session.error",
+        message: "不支持的实时语音模式。",
+      });
+      browserSocket.close(1008, "Unsupported realtime mode");
+      return;
+    }
+    const model =
+      mode === RealtimeMode.Translation
+        ? config.DASHSCOPE_TRANSLATION_MODEL
+        : config.DASHSCOPE_ASR_MODEL;
+    const upstreamUrl = options.upstreamUrl ?? getRealtimeWebSocketUrl(model);
     const apiKey = options.apiKey ?? config.DASHSCOPE_API_KEY;
     const search = options.search ?? searchKnowledge;
     const turnGapMs = options.turnGapMs ?? defaultTurnGapMs;
@@ -95,9 +142,11 @@ export function createTranslationWebSocketServer(options: TranslationProxyOption
     let translationParts: string[] = [];
     let turnFlushTimer: ReturnType<typeof setTimeout> | undefined;
     let isFinishing = false;
-    const upstreamSocket = new WebSocket(upstreamUrl, {
-      headers: { Authorization: `Bearer ${apiKey}` },
-    });
+    const headers: Record<string, string> = { Authorization: `Bearer ${apiKey}` };
+    if (mode === RealtimeMode.Transcription) {
+      headers["OpenAI-Beta"] = "realtime=v1";
+    }
+    const upstreamSocket = new WebSocket(upstreamUrl, { headers });
 
     /** Wraps raw PCM bytes in the Alibaba Cloud realtime audio event. */
     function sendAudio(buffer: Buffer) {
@@ -117,7 +166,7 @@ export function createTranslationWebSocketServer(options: TranslationProxyOption
       );
     }
 
-    /** Searches knowledge asynchronously after each finalized English utterance. */
+    /** Searches knowledge asynchronously after each finalized recognized utterance. */
     async function retrieveKnowledge(itemId: string, transcript: string) {
       try {
         const results = await search(transcript, maximumKnowledgeResults);
@@ -153,7 +202,7 @@ export function createTranslationWebSocketServer(options: TranslationProxyOption
       }
     }
 
-    /** Publishes one merged turn and performs exactly one search for its full English text. */
+    /** Publishes one merged turn and performs exactly one search for its full recognized text. */
     function flushTurn() {
       clearTurnFlushTimer();
       if (!activeTurnId || sourceParts.length === 0) {
@@ -196,7 +245,7 @@ export function createTranslationWebSocketServer(options: TranslationProxyOption
           break;
         case "session.updated":
           isUpstreamReady = true;
-          sendJson(browserSocket, { type: "session.ready" });
+          sendJson(browserSocket, { type: "session.ready", mode });
           while (queuedAudio.length > 0) {
             sendAudio(queuedAudio.shift()!);
           }
@@ -212,7 +261,12 @@ export function createTranslationWebSocketServer(options: TranslationProxyOption
           }
           break;
         case "conversation.item.created":
-          if (event.item?.role === "assistant" && event.item.id && event.previous_item_id) {
+          if (
+            mode === RealtimeMode.Translation &&
+            event.item?.role === "assistant" &&
+            event.item.id &&
+            event.previous_item_id
+          ) {
             translationToSource.set(event.item.id, event.previous_item_id);
           }
           break;
@@ -243,6 +297,9 @@ export function createTranslationWebSocketServer(options: TranslationProxyOption
           }
           break;
         case "response.text.text": {
+          if (mode !== RealtimeMode.Translation) {
+            break;
+          }
           const sourceItemId = event.item_id && translationToSource.get(event.item_id);
           const itemId = (sourceItemId && sourceToTurn.get(sourceItemId)) || activeTurnId;
           sendJson(browserSocket, {
@@ -256,6 +313,9 @@ export function createTranslationWebSocketServer(options: TranslationProxyOption
           break;
         }
         case "response.text.done": {
+          if (mode !== RealtimeMode.Translation) {
+            break;
+          }
           const sourceItemId = event.item_id && translationToSource.get(event.item_id);
           const itemId = (sourceItemId && sourceToTurn.get(sourceItemId)) || activeTurnId;
           if (event.text) {
@@ -274,7 +334,7 @@ export function createTranslationWebSocketServer(options: TranslationProxyOption
         case "error":
           sendJson(browserSocket, {
             type: "session.error",
-            message: event.error?.message ?? "阿里云同传返回错误。",
+            message: event.error?.message ?? "阿里云实时语音服务返回错误。",
           });
           break;
         case "session.finished":
@@ -288,7 +348,7 @@ export function createTranslationWebSocketServer(options: TranslationProxyOption
     }
 
     upstreamSocket.on("open", () => {
-      upstreamSocket.send(JSON.stringify(createSessionUpdate()));
+      upstreamSocket.send(JSON.stringify(createSessionUpdate(mode)));
     });
     upstreamSocket.on("message", (data) => {
       try {
@@ -296,7 +356,7 @@ export function createTranslationWebSocketServer(options: TranslationProxyOption
       } catch {
         sendJson(browserSocket, {
           type: "session.error",
-          message: "无法解析阿里云同传响应。",
+          message: "无法解析阿里云实时语音响应。",
         });
       }
     });
@@ -357,15 +417,17 @@ export function isAllowedBrowserOrigin(origin: string | undefined) {
 }
 
 /** Accepts only the dedicated realtime endpoint during an HTTP upgrade. */
-export function handleTranslationUpgrade(
+export function handleRealtimeUpgrade(
   socketServer: WebSocketServer,
   request: IncomingMessage,
   socket: import("node:stream").Duplex,
   head: Buffer,
 ) {
   const requestUrl = new URL(request.url ?? "/", "http://localhost");
+  const mode = parseRealtimeMode(requestUrl.searchParams.get("mode"));
   if (
     requestUrl.pathname !== "/api/realtime" ||
+    !mode ||
     !isAllowedBrowserOrigin(request.headers.origin)
   ) {
     socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");

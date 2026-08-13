@@ -7,8 +7,8 @@ import { databasePool } from "./database/client.js";
 import { fetchKnowledgeStats, refreshKnowledgeDirectory } from "./knowledge/ingest.js";
 import { maximumKnowledgeResults, searchKnowledge } from "./knowledge/search.js";
 import {
-  createTranslationWebSocketServer,
-  handleTranslationUpgrade,
+  createRealtimeWebSocketServer,
+  handleRealtimeUpgrade,
 } from "./realtime/translation-proxy.js";
 
 const searchSchema = z.object({
@@ -32,6 +32,7 @@ app.get("/api/health", async (_request, response) => {
   response.json({
     databaseReady,
     dashScopeReady: Boolean(config.DASHSCOPE_API_KEY && config.DASHSCOPE_WORKSPACE_ID),
+    asrModel: config.DASHSCOPE_ASR_MODEL,
     translationModel: config.DASHSCOPE_TRANSLATION_MODEL,
     embeddingModel: config.DASHSCOPE_EMBEDDING_MODEL,
   });
@@ -109,9 +110,9 @@ if (config.NODE_ENV === "production") {
 }
 
 const server = createServer(app);
-const realtimeSocketServer = createTranslationWebSocketServer();
+const realtimeSocketServer = createRealtimeWebSocketServer();
 server.on("upgrade", (request, socket, head) => {
-  handleTranslationUpgrade(realtimeSocketServer, request, socket, head);
+  handleRealtimeUpgrade(realtimeSocketServer, request, socket, head);
 });
 server.listen(config.PORT, config.HOST, () => {
   console.log(

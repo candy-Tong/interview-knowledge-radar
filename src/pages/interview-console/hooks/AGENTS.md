@@ -11,6 +11,8 @@
 ## `use-interview-session.ts`
 
 - 该 hook 是浏览器会话状态的唯一所有者：phase、segments、音频资源、WebSocket 和发送前音频队列。
+- mode 只在 Idle/Error 切换，并通过 `/api/realtime?mode=...` 固定服务端上游；普通模式不能连接翻译模型。
+- 新建 segment 时保存当前 mode，保证混合历史中普通行不出现翻译占位。
 - `updateSegment()` 按 itemId 原位更新或追加，保持 turn 到达顺序。
 - WebSocket 打开前最多缓存 100 个 PCM 块；连接后按序发送并清空。
 - 服务端负责 5 秒 turn 合并，前端不要再按 partial/final 创建额外搜索行。
@@ -22,4 +24,3 @@
 
 - 单元层验证事件到 segment 的归并；浏览器层验证授权取消、无音轨、主动结束、用户停止共享、连接断开和组件卸载。
 - 真实权限必须由用户点击触发，不要在 effect 中自动请求共享。
-

@@ -81,7 +81,7 @@ export function InterviewConsolePage() {
         <div className="brand-lockup">
           <span className="brand-mark">IKR</span>
           <div>
-            <p>SYSTEM AUDIO · HYBRID RAG</p>
+            <p>SYSTEM AUDIO · ASR · HYBRID RAG</p>
             <h1>Interview Knowledge Radar</h1>
           </div>
         </div>
@@ -110,7 +110,7 @@ export function InterviewConsolePage() {
         </nav>
         <div className="header-actions">
           <div className="readiness-strip" aria-label="服务状态">
-            <div className={health?.dashScopeReady ? "is-ready" : ""} title="阿里云同传">
+            <div className={health?.dashScopeReady ? "is-ready" : ""} title="阿里云实时语音">
               <Headphones size={13} />
               <i />
             </div>
@@ -127,7 +127,9 @@ export function InterviewConsolePage() {
             audioSourceLabel={session.audioSourceLabel}
             canStart={canStart}
             errorMessage={session.errorMessage}
+            mode={session.mode}
             onClear={session.clear}
+            onModeChange={session.setMode}
             onStart={session.start}
             onStop={session.stop}
             phase={session.phase}
@@ -139,6 +141,7 @@ export function InterviewConsolePage() {
       {activeView === ConsoleView.Interview ? (
         <div className="workspace-grid" role="tabpanel">
           <TranscriptDeck
+            mode={session.mode}
             onSelect={setSelectedSegmentId}
             segments={session.segments}
             selectedSegmentId={selectedSegment?.itemId}

@@ -8,12 +8,14 @@
 
 ## 产品目标
 
-这是一个本地优先的实时面试辅助工具：浏览器采集用户主动共享的系统音频，Node 服务代理阿里云实时英文识别/中文翻译，并用 PostgreSQL 中的 BM25 与 pgvector 混合检索本地面试知识。
+这是一个本地优先的实时面试辅助工具：浏览器采集用户主动共享的系统音频，Node 服务按模式代理阿里云实时翻译或独立实时 ASR，并用 PostgreSQL 中的 BM25 与 pgvector 混合检索本地面试知识。
 
 必须保持以下产品约束：
 
 - 只使用 `getDisplayMedia` 获取用户明确共享的电脑音频，不请求麦克风，也不在失败时回退到麦克风。
 - 阿里云 API Key 和 Workspace ID 只留在服务端，不进入前端包、浏览器日志或接口响应。
+- 翻译模式使用 LiveTranslate 输出英文原文与中文同传；普通模式必须连接独立 ASR 上游，不能只在前端隐藏翻译结果。
+- 模式只允许在会话开始前切换；会话期间锁定，两个模式都保留 5 秒 turn 合并和知识检索。
 - `knowledge-base/` 是递归扫描的知识根目录；一份知识源 Markdown 对应一条完整知识，各层 `AGENTS.md` 不参与入库。
 - 一次检索最多返回两条知识；中栏和右栏各展示一条完整知识。
 - 连续语音只有静音超过 5 秒才形成新的面试官行，并且每行只触发一次知识检索。
@@ -68,7 +70,7 @@ npm run dev
 - 新增 WebSocket 入口时保持路径白名单和 loopback Origin 校验。
 - 所有 SQL 值使用参数化查询；结构性 SQL 必须可审查且避免拼接用户输入。
 - 不扩大 `HOST=127.0.0.1` 的默认监听范围，除非用户明确要求并理解局域网暴露风险。
-- 音频会发送给阿里云同传；完整知识和查询会用于阿里云向量生成。变更数据流时同步更新隐私说明。
+- 音频按当前模式发送给阿里云 LiveTranslate 或 Qwen3-ASR；完整知识和查询会用于阿里云向量生成。变更数据流时同步更新隐私说明。
 
 ## 验证要求
 
@@ -83,6 +85,6 @@ npm run build
 
 - 数据库/schema：`npm run db:init`，必要时在测试库重复执行确认幂等。
 - 知识导入/检索：`npm run db:ingest`，再检查 `/api/knowledge/stats`、`/api/knowledge` 和 `/api/search`。
-- 实时协议：运行 `server/realtime/translation-proxy.test.ts`，确认相邻 ASR 片段只产生一行和一次检索。
+- 实时协议：运行 `server/realtime/translation-proxy.test.ts`，确认两种模式选择正确上游、普通模式无翻译事件，并且相邻 ASR 片段只产生一行和一次检索。
 - 前端布局：在 Chrome 中确认页面 `scrollWidth/scrollHeight` 不超过视口，内部滚动区仍可滚动。
 - 音频链路：必须由真实用户手势触发共享权限；不要用自动化绕过浏览器授权。

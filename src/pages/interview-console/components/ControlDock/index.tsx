@@ -1,9 +1,10 @@
-import { CircleStop, Radio, RotateCcw } from "lucide-react";
-import { SessionPhase } from "../../types";
+import { AudioLines, CircleStop, Languages, Radio, RotateCcw } from "lucide-react";
+import { RealtimeMode, SessionPhase } from "../../types";
 import "./style.css";
 
 type ControlDockProps = {
   phase: SessionPhase;
+  mode: RealtimeMode;
   audioSourceLabel: string;
   canStart: boolean;
   errorMessage: string;
@@ -11,6 +12,7 @@ type ControlDockProps = {
   onStart: () => Promise<void>;
   onStop: () => Promise<void>;
   onClear: () => void;
+  onModeChange: (mode: RealtimeMode) => void;
 };
 
 const phaseLabelMap: Record<SessionPhase, string> = {
@@ -25,6 +27,7 @@ const phaseLabelMap: Record<SessionPhase, string> = {
 /** Keeps the high-stakes capture actions explicit and visually distinct. */
 export function ControlDock({
   phase,
+  mode,
   audioSourceLabel,
   canStart,
   errorMessage,
@@ -32,10 +35,35 @@ export function ControlDock({
   onStart,
   onStop,
   onClear,
+  onModeChange,
 }: ControlDockProps) {
   const isActive = ![SessionPhase.Idle, SessionPhase.Error].includes(phase);
   return (
     <div className="control-dock">
+      <div aria-label="实时语音模式" className="mode-switch" role="group">
+        <button
+          aria-pressed={mode === RealtimeMode.Translation}
+          className={mode === RealtimeMode.Translation ? "is-active" : ""}
+          disabled={isActive}
+          onClick={() => onModeChange(RealtimeMode.Translation)}
+          title="英文识别并调用实时翻译 API 输出中文"
+          type="button"
+        >
+          <Languages size={12} />
+          翻译模式
+        </button>
+        <button
+          aria-pressed={mode === RealtimeMode.Transcription}
+          className={mode === RealtimeMode.Transcription ? "is-active is-transcription" : ""}
+          disabled={isActive}
+          onClick={() => onModeChange(RealtimeMode.Transcription)}
+          title="只调用实时语音识别 API，不调用翻译模型"
+          type="button"
+        >
+          <AudioLines size={12} />
+          普通模式
+        </button>
+      </div>
       <div className="capture-state">
         <span className={`state-light ${isActive ? "is-active" : ""}`} />
         <div>
