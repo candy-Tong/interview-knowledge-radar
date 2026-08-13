@@ -14,22 +14,29 @@
 .transcript-deck .panel-heading {
   display: grid;
   min-height: 0;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 6px;
+  grid-template-areas:
+    "title mode"
+    "divider divider"
+    "state actions";
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto 1px auto;
+  gap: 6px 8px;
   padding: 8px 9px 7px;
+}
+
+.transcript-deck .panel-heading::after {
+  width: 100%;
+  border-top: 1px dashed rgba(104, 87, 112, 0.16);
+  content: "";
+  grid-area: divider;
 }
 
 .transcript-heading-top {
   display: flex;
   min-width: 0;
   align-items: center;
-  justify-content: space-between;
   gap: 7px;
-}
-
-.transcript-heading-top > svg {
-  flex: 0 0 auto;
-  color: var(--amber);
+  grid-area: title;
 }
 
 .transcript-list {

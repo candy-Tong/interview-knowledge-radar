@@ -18,10 +18,10 @@ type ControlDockProps = {
 const phaseLabelMap: Record<SessionPhase, string> = {
   [SessionPhase.Idle]: "待命",
   [SessionPhase.Connecting]: "连接中",
-  [SessionPhase.Listening]: "监听系统音频",
-  [SessionPhase.HearingSpeech]: "检测到面试官语音",
-  [SessionPhase.Finishing]: "正在收尾",
-  [SessionPhase.Error]: "需要检查",
+  [SessionPhase.Listening]: "监听中",
+  [SessionPhase.HearingSpeech]: "识别中",
+  [SessionPhase.Finishing]: "收尾中",
+  [SessionPhase.Error]: "需检查",
 };
 
 /** Keeps the high-stakes capture actions explicit and visually distinct. */
@@ -38,10 +38,19 @@ export function ControlDock({
   onModeChange,
 }: ControlDockProps) {
   const isActive = ![SessionPhase.Idle, SessionPhase.Error].includes(phase);
+  const statusDetail = errorMessage || audioSourceLabel || readinessMessage;
+  const statusSummary = errorMessage
+    ? "查看提示"
+    : audioSourceLabel
+      ? "系统音频"
+      : canStart
+        ? "仅系统音频"
+        : "检查配置";
   return (
     <div className="control-dock">
       <div aria-label="实时语音模式" className="mode-switch" role="group">
         <button
+          aria-label="翻译模式"
           aria-pressed={mode === RealtimeMode.Translation}
           className={mode === RealtimeMode.Translation ? "is-active" : ""}
           disabled={isActive}
@@ -50,9 +59,10 @@ export function ControlDock({
           type="button"
         >
           <Languages size={12} />
-          <span>翻译模式</span>
+          <span>翻译</span>
         </button>
         <button
+          aria-label="普通模式"
           aria-pressed={mode === RealtimeMode.Transcription}
           className={mode === RealtimeMode.Transcription ? "is-active is-transcription" : ""}
           disabled={isActive}
@@ -61,14 +71,18 @@ export function ControlDock({
           type="button"
         >
           <AudioLines size={12} />
-          <span>普通模式</span>
+          <span>普通</span>
         </button>
       </div>
-      <div className="capture-state">
+      <div
+        aria-label={`${phaseLabelMap[phase]}：${statusDetail}`}
+        className="capture-state"
+        title={statusDetail}
+      >
         <span className={`state-light ${isActive ? "is-active" : ""}`} />
         <div>
           <strong>{phaseLabelMap[phase]}</strong>
-          <small>{errorMessage || audioSourceLabel || readinessMessage}</small>
+          <small>{statusSummary}</small>
         </div>
       </div>
       <div className="dock-actions">
@@ -95,7 +109,7 @@ export function ControlDock({
             type="button"
           >
             <Radio size={18} />
-            <span>{canStart ? "监听系统音频" : "配置未完成"}</span>
+            <span>{canStart ? "监听" : "未就绪"}</span>
           </button>
         )}
       </div>

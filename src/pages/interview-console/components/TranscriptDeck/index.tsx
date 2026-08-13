@@ -1,4 +1,4 @@
-import { AudioLines, Check, Languages } from "lucide-react";
+import { Check, Languages } from "lucide-react";
 import type { ReactNode } from "react";
 import type { TranscriptSegment } from "../../types";
 import { RealtimeMode } from "../../types";
@@ -29,7 +29,6 @@ export function TranscriptDeck({
             <span className="panel-kicker">01 / LIVE TRANSCRIPT</span>
             <h2>面试官正在问什么</h2>
           </div>
-          <AudioLines size={22} strokeWidth={1.5} />
         </div>
         {controls}
       </div>

@@ -1,12 +1,5 @@
 .control-dock {
-  display: grid;
-  min-width: 0;
-  align-items: center;
-  grid-template-areas: "state mode actions";
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  gap: 5px;
-  padding-top: 6px;
-  border-top: 1px dashed rgba(104, 87, 112, 0.16);
+  display: contents;
 }
 
 .mode-switch {
@@ -14,6 +7,8 @@
   display: flex;
   flex: 0 0 auto;
   gap: 2px;
+  align-self: end;
+  justify-self: end;
   padding: 2px;
   border: 1px solid rgba(104, 87, 112, 0.15);
   border-radius: 999px;
@@ -25,7 +20,7 @@
   min-height: 24px;
   align-items: center;
   gap: 4px;
-  padding: 4px 8px;
+  padding: 4px 7px;
   border: 0;
   border-radius: 999px;
   color: #8a7f8c;
@@ -88,7 +83,7 @@
 
 .capture-state small {
   overflow: hidden;
-  max-width: 110px;
+  max-width: 90px;
   color: #8b818e;
   font-size: 7px;
   text-overflow: ellipsis;
@@ -120,8 +115,8 @@
 }
 
 .capture-button {
-  min-width: 94px;
-  padding: 8px 10px;
+  min-width: 64px;
+  padding: 8px;
   color: #405751;
   background: #a9ded2;
 }
@@ -135,7 +130,7 @@
   50% { opacity: 0.45; }
 }
 
-@container (max-width: 390px) {
+@container (max-width: 315px) {
   .capture-state small,
   .clear-button span,
   .capture-button span,
