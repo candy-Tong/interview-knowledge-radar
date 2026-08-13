@@ -1,0 +1,51 @@
+[
+  {
+    "id": "complaint-agent-role-follow-up",
+    "recentInterviewerTurns": [
+      "Now let's focus on your Finance Customer Complaint Agent project. What problem was it solving?"
+    ],
+    "currentTurn": "Good, and what was your role specifically?",
+    "expectation": "The retrieval query asks for the candidate's specific role in the Finance Customer Complaint Agent project. Good is only an acknowledgement and must not become an initiative name."
+  },
+  {
+    "id": "complaint-agent-core-problem",
+    "recentInterviewerTurns": [
+      "Please walk me through your Finance Customer Complaint Agent project."
+    ],
+    "currentTurn": "What was the core problem this agent aimed to solve?",
+    "expectation": "The retrieval query resolves this agent to the Finance Customer Complaint Agent project and asks about its core problem."
+  },
+  {
+    "id": "complaint-agent-false-positive-method",
+    "recentInterviewerTurns": [
+      "We are discussing the Finance Customer Complaint Agent project.",
+      "You mentioned false positive alerts."
+    ],
+    "currentTurn": "How did you reduce them?",
+    "expectation": "The retrieval query asks how false positive alerts were reduced in the Finance Customer Complaint Agent project."
+  },
+  {
+    "id": "monorepo-leadership-follow-up",
+    "recentInterviewerTurns": [
+      "Let's move to the monorepo migration project."
+    ],
+    "currentTurn": "What did you personally lead?",
+    "expectation": "The retrieval query asks what the candidate personally led in the monorepo migration project."
+  },
+  {
+    "id": "explicit-project-switch-wins",
+    "recentInterviewerTurns": [
+      "We were discussing the Finance Customer Complaint Agent project."
+    ],
+    "currentTurn": "Now, in the post-loan collection project, what was the hardest technical challenge?",
+    "expectation": "The retrieval query uses the explicitly named post-loan collection project and does not keep the older complaint project context."
+  },
+  {
+    "id": "standalone-introduction-does-not-inherit",
+    "recentInterviewerTurns": [
+      "Let's focus on your Finance Customer Complaint Agent project."
+    ],
+    "currentTurn": "Please introduce yourself in English.",
+    "expectation": "The retrieval query remains a standalone English self-introduction request and does not inject the complaint project."
+  }
+]

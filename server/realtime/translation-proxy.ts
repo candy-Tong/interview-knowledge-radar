@@ -13,6 +13,8 @@ import {
   writeRuntimeLog,
 } from "../runtime-log.js";
 import {
+  type InterviewQuestion,
+  type QuestionSplitInput,
   type QuestionSplitResult,
   splitInterviewQuestions,
 } from "./question-splitter.js";
@@ -41,7 +43,7 @@ type RealtimeProxyOptions = {
   search?: typeof searchKnowledge;
   draftSearch?: typeof searchKnowledgeBm25;
   splitQuestions?: (
-    transcript: string,
+    input: QuestionSplitInput,
     signal?: AbortSignal,
   ) => Promise<QuestionSplitResult>;
   turnGapMs?: number;
@@ -56,6 +58,7 @@ const defaultProgressiveSearchIntervalMs = 800;
 type PendingQuestionAnalysis = {
   itemId: string;
   transcript: string;
+  recentInterviewerTurns: string[];
   isFinal: boolean;
 };
 
@@ -65,7 +68,7 @@ type QuestionAnalysisTask = PendingQuestionAnalysis & {
 };
 
 type QuestionState = {
-  questions: string[];
+  questions: InterviewQuestion[];
   usedFallback: boolean;
 };
 
@@ -82,7 +85,7 @@ function isMeaningfulProgressiveQuery(query: string) {
 }
 
 /** Keeps completed draft questions steady while allowing the trailing question to grow. */
-export function stabilizeQuestionTexts(
+export function stabilizeQuestions(
   previous: QuestionState | undefined,
   incoming: QuestionSplitResult,
   isFinal: boolean,
@@ -96,7 +99,10 @@ export function stabilizeQuestionTexts(
   const trailingQuestions = incomingSuffix.length > 0
     ? incomingSuffix
     : incoming.questions.slice(-1);
-  return [...new Set([...stablePrefix, ...trailingQuestions])];
+  const questionsByText = new Map(
+    [...stablePrefix, ...trailingQuestions].map((question) => [question.text, question]),
+  );
+  return [...questionsByText.values()];
 }
 
 /** Sends a JSON event only while the browser WebSocket remains writable. */
@@ -187,13 +193,16 @@ export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}
     const draftSearch =
       options.draftSearch ?? (options.search ? options.search : searchKnowledgeBm25);
     const splitQuestions: (
-      transcript: string,
+      input: QuestionSplitInput,
       signal?: AbortSignal,
     ) => Promise<QuestionSplitResult> =
       options.splitQuestions ??
       (config.NODE_ENV === "test"
-        ? async (transcript: string) => ({
-            questions: [transcript],
+        ? async (input: QuestionSplitInput) => ({
+            questions: [{
+              text: input.transcript,
+              retrievalQuery: input.transcript,
+            }],
             usedFallback: true,
             fallbackReason: "test_default",
           })
@@ -229,6 +238,7 @@ export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}
     const lastQuestionAnalysisStartedAtByTurn = new Map<string, number>();
     const retrievalVersionByQuestion = new Map<string, number>();
     const lastRetrievalByQuestion = new Map<string, string>();
+    const recentInterviewerTurns: string[] = [];
     let isUpstreamReady = false;
     let activeTurnId = "";
     let sourceParts: string[] = [];
@@ -414,20 +424,24 @@ export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}
       task: QuestionAnalysisTask,
       startedAt: number,
     ) {
-      const result = await splitQuestions(task.transcript, task.controller.signal);
+      const result = await splitQuestions({
+        transcript: task.transcript,
+        recentInterviewerTurns: task.recentInterviewerTurns,
+      }, task.controller.signal);
       if (task.controller.signal.aborted) {
         throw new DOMException("Question analysis was superseded", "AbortError");
       }
 
       const previousState = questionStateByTurn.get(task.itemId);
-      const questionTexts = stabilizeQuestionTexts(previousState, result, task.isFinal);
+      const resolvedQuestions = stabilizeQuestions(previousState, result, task.isFinal);
       questionStateByTurn.set(task.itemId, {
-        questions: questionTexts,
+        questions: resolvedQuestions,
         usedFallback: result.usedFallback,
       });
-      const questions = questionTexts.map((text, index) => ({
+      const questions = resolvedQuestions.map((question, index) => ({
         id: `${task.itemId}_q${index + 1}`,
-        text,
+        text: question.text,
+        retrievalQuery: question.retrievalQuery,
         isFinal: task.isFinal,
       }));
       void logRuntimeEvent("question.split.completed", {
@@ -450,7 +464,7 @@ export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}
         startQuestionKnowledgeRetrieval(
           task.itemId,
           question.id,
-          question.text,
+          question.retrievalQuery,
           task.isFinal,
         );
       }
@@ -561,7 +575,12 @@ export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}
         return;
       }
 
-      pendingQuestionAnalysis = { itemId, transcript: query, isFinal: false };
+      pendingQuestionAnalysis = {
+        itemId,
+        transcript: query,
+        recentInterviewerTurns: [...recentInterviewerTurns],
+        isFinal: false,
+      };
       const elapsed = Date.now() - (lastQuestionAnalysisStartedAtByTurn.get(itemId) ?? 0);
       const waitMs = Math.max(0, progressiveSearchIntervalMs - elapsed);
       if (waitMs === 0) {
@@ -627,7 +646,16 @@ export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}
         });
       }
 
-      startQuestionAnalysis({ itemId, transcript: sourceText, isFinal: true });
+      startQuestionAnalysis({
+        itemId,
+        transcript: sourceText,
+        recentInterviewerTurns: [...recentInterviewerTurns],
+        isFinal: true,
+      });
+      recentInterviewerTurns.push(sourceText);
+      if (recentInterviewerTurns.length > 3) {
+        recentInterviewerTurns.shift();
+      }
     }
 
     /** Starts the silence window after which the next ASR item becomes a new row. */
@@ -711,7 +739,12 @@ export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}
               mergedText: sourceText,
             });
             clearProgressiveSearchTimer();
-            startQuestionAnalysis({ itemId, transcript: sourceText, isFinal: false });
+            startQuestionAnalysis({
+              itemId,
+              transcript: sourceText,
+              recentInterviewerTurns: [...recentInterviewerTurns],
+              isFinal: false,
+            });
             scheduleTurnFlush();
           }
           break;

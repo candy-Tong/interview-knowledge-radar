@@ -5,6 +5,7 @@ const splitQuestionResponseSchema = z.object({
   questions: z
     .array(z.object({
       text: z.string().trim().min(2).max(1_000),
+      retrievalQuery: z.string().trim().min(2).max(1_000),
     }))
     .min(1)
     .max(6),
@@ -20,9 +21,19 @@ type LocalModelsResponse = {
 };
 
 export type QuestionSplitResult = {
-  questions: string[];
+  questions: InterviewQuestion[];
   usedFallback: boolean;
   fallbackReason?: string;
+};
+
+export type InterviewQuestion = {
+  text: string;
+  retrievalQuery: string;
+};
+
+export type QuestionSplitInput = {
+  transcript: string;
+  recentInterviewerTurns: string[];
 };
 
 const questionSplitJsonSchema = {
@@ -36,27 +47,43 @@ const questionSplitJsonSchema = {
       items: {
         type: "object",
         additionalProperties: false,
-        properties: { text: { type: "string", minLength: 2, maxLength: 1_000 } },
-        required: ["text"],
+        properties: {
+          text: { type: "string", minLength: 2, maxLength: 1_000 },
+          retrievalQuery: { type: "string", minLength: 2, maxLength: 1_000 },
+        },
+        required: ["text", "retrievalQuery"],
       },
     },
   },
   required: ["questions"],
 } as const;
 
-const systemPrompt = `You split an interviewer's spoken turn into independent questions or answer requests for knowledge retrieval.
+const systemPrompt = `You split and contextually rewrite an interviewer's current spoken turn for knowledge retrieval.
+The CURRENT TURN is the only source of requests. RECENT CONTEXT is reference material, never a request to repeat or answer.
 Return the minimum number of self-contained items needed to answer every distinct request.
+For each item, return text and retrievalQuery.
+text contains only the request expressed in CURRENT TURN and is suitable for display. Remove conversational acknowledgements such as "Good", "Thanks", "Okay", or "I see" when they are not part of the request.
+retrievalQuery starts from text and adds only the smallest missing referent from RECENT CONTEXT needed to make it independently searchable.
 Split coordinated clauses when each asks about a different topic, project, decision, process, reason, example, or result, even when they share one lead-in.
 Preserve the original language, names, projects, constraints, and emphasis.
 Rewrite pronouns such as it, that, this, and they with their explicit referent when needed to make each item independently searchable.
-Do not answer, summarize, add facts, or split one request merely because it has supporting details.
+Use recentInterviewerTurns only to resolve context required by the current request. Acknowledge words are never project or initiative names.
+Do not answer, summarize, add facts, invent project names, or split one request merely because it has supporting details.
+Never copy a question or request from RECENT CONTEXT into the output.
+When CURRENT TURN is already independently searchable, retrievalQuery must preserve it without adding an unrelated project from RECENT CONTEXT.
 An unfinished trailing request may remain as the final item.
 
 Examples:
+- With recent context "Let's focus on your customer complaint agent project", "Good, what was your role specifically?" becomes text "What was your role specifically?" and retrievalQuery "What was your role specifically in the customer complaint agent project?".
+- With the same recent context, "Please introduce yourself in English." remains text and retrievalQuery "Please introduce yourself in English.".
 - "Please introduce yourself. How did you reduce false positives?" becomes two items.
-- "Describe your frontend leadership experience, and what was your role in the complaint Agent project?" becomes two items.
-- "How did you reduce false positives, and what impact did that have?" becomes "How did you reduce false positives?" and "What impact did reducing false positives have?".
 - "Please introduce yourself in English and focus on your leadership experience." remains one item because the second clause only constrains the introduction.`;
+
+const questionScaffoldingWords = new Set([
+  "a", "an", "and", "are", "did", "do", "does", "for", "how", "in", "is",
+  "it", "me", "my", "of", "on", "or", "that", "the", "this", "to", "was",
+  "we", "were", "what", "when", "where", "which", "who", "why", "you", "your",
+]);
 
 /** Joins one OpenAI-compatible path without depending on trailing-slash configuration. */
 function getLocalModelEndpoint(path: string) {
@@ -65,18 +92,39 @@ function getLocalModelEndpoint(path: string) {
 
 /** Produces one safe fallback item so a local-model outage never blocks retrieval. */
 function createFallback(transcript: string, reason: string): QuestionSplitResult {
+  const normalizedTranscript = transcript.trim().replace(/\s+/g, " ");
   return {
-    questions: [transcript.trim().replace(/\s+/g, " ")],
+    questions: [{ text: normalizedTranscript, retrievalQuery: normalizedTranscript }],
     usedFallback: true,
     fallbackReason: reason,
   };
 }
 
+/** Keeps multi-question output tied to the current turn instead of copied history. */
+function removeContextLeakage(
+  questions: InterviewQuestion[],
+  normalizedTranscript: string,
+) {
+  if (questions.length <= 1) {
+    return questions;
+  }
+  const currentTerms = new Set(
+    (normalizedTranscript.toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [])
+      .filter((term) => !questionScaffoldingWords.has(term)),
+  );
+  const groundedQuestions = questions.filter((question) => {
+    const outputTerms = question.text.toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+    return outputTerms.some((term) => currentTerms.has(term));
+  });
+  return groundedQuestions.length > 0 ? groundedQuestions : questions;
+}
+
 /** Splits one interviewer turn through the loopback-only local model service. */
 export async function splitInterviewQuestions(
-  transcript: string,
+  input: QuestionSplitInput,
   signal?: AbortSignal,
 ): Promise<QuestionSplitResult> {
+  const { transcript, recentInterviewerTurns } = input;
   const normalizedTranscript = transcript.trim().replace(/\s+/g, " ");
   if (!normalizedTranscript) {
     return createFallback(transcript, "empty_transcript");
@@ -103,7 +151,19 @@ export async function splitInterviewQuestions(
         max_tokens: 360,
         messages: [
           { role: "system", content: systemPrompt },
-          { role: "user", content: normalizedTranscript },
+          {
+            role: "user",
+            content: [
+              "<recent_context_reference_only>",
+              ...recentInterviewerTurns
+                .map((turn) => turn.trim().replace(/\s+/g, " "))
+                .filter(Boolean),
+              "</recent_context_reference_only>",
+              "<current_turn_only_source_of_requests>",
+              normalizedTranscript,
+              "</current_turn_only_source_of_requests>",
+            ].join("\n"),
+          },
         ],
         response_format: {
           type: "json_schema",
@@ -132,7 +192,10 @@ export async function splitInterviewQuestions(
       return createFallback(normalizedTranscript, "local_model_invalid_schema");
     }
 
-    const questions = [...new Set(parsed.data.questions.map((item) => item.text.trim()))];
+    const questions = removeContextLeakage(parsed.data.questions.map((item) => ({
+      text: item.text.trim(),
+      retrievalQuery: item.retrievalQuery.trim(),
+    })), normalizedTranscript);
     return questions.length > 0
       ? { questions, usedFallback: false }
       : createFallback(normalizedTranscript, "local_model_no_questions");

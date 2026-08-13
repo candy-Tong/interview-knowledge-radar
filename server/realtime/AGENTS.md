@@ -14,7 +14,7 @@
 - `speech.started`、`speech.stopped`
 - `source.partial`、`source.final`
 - `translation.partial`、`translation.final`
-- `questions.updated`：同一 turn 内的问题列表，每项带稳定 `questionId` 和 `isFinal`
+- `questions.updated`：同一 turn 内的问题列表，每项带稳定 `questionId`、当前问题展示文本和 `isFinal`
 - `question.knowledge.results`、`question.knowledge.error`：问题级召回结果
 - `knowledge.results`、`knowledge.error`：暂保留的兼容事件，新前端不依赖
 
@@ -24,12 +24,14 @@
 - 每次新语音开始都取消待执行的 flush；静音持续超过默认 5 秒才 `flushTurn()`。
 - 一轮只发布一次 `source.final`；`source.partial` 达到可检索长度后，最多每 800ms 通过本地模型刷新拆题。
 - 同一 turn 的本地拆题保持 single-flight；模型忙时只保留最新草稿，最终拆题可中止正在运行的草稿并优先执行。
+- 本地模型同时返回当前问题 `text` 和用于召回的 `retrievalQuery`；后者可使用最近三轮已经完成的面试官原文补全项目与指代，前者不得复述历史问题。
+- `retrievalQuery` 同时用于草稿 BM25 和最终 hybrid；本地模型失败时两者都安全回退到当前问题原文。
 - 草稿拆题中，已稳定的前缀问题不随后续 ASR 反复改写，只允许最后一题增长；最终 turn 可做完整校正。
 - 说话中每个问题只调用本地 BM25；5 秒 flush 后每个最终问题调用混合检索。不等待翻译事件。
 - 拆题和问题检索各自使用版本号抑制过期响应；相同问题在同一检索阶段必须去重。
 - 翻译 item 通过 `previous_item_id` 映射回 source item，再映射到逻辑 turn。
 - 会话结束时先 flush 当前轮，等待所有拆题和检索 settled，再通知前端结束。
-- 每个会话生成独立 `sessionId`；partial、完整 ASR 片段、翻译片段、最终 turn、检索 query、命中知识与错误都写入运行日志。
+- 每个会话生成独立 `sessionId`；partial、完整 ASR 片段、翻译片段、最终 turn、展示问题、改写后的检索 query、改写耗时/回退状态、命中知识与错误都写入运行日志。
 - 检索完成日志包含 rank、知识 id/sourceName/heading、BM25/vector/hybrid 分数、相关句偏移和相关文本，不重复写入完整知识正文。
 
 修改上述状态机时必须保留这些性质，避免一个问题产生多行、重复查询或无节制搜索。
@@ -47,7 +49,7 @@
 
 - 测试使用本地 mock WebSocket 上游以及注入的 splitter/draftSearch/search，不调用真实阿里云或本地模型。
 - 缩短 `turnGapMs` 或 `progressiveSearchIntervalMs` 只用于测试；生产默认分别为 5 秒和 800ms。
-- 至少断言模式对应的会话配置、复合 turn 拆成多问题、每题独立召回、草稿 BM25/最终 hybrid 分层、过期结果被抑制、limit 为 2、结束前等待拆题/检索/日志完成以及 Origin 拒绝逻辑。
+- 至少断言模式对应的会话配置、复合 turn 拆成多问题、跨 turn 项目追问改写、每题独立召回、草稿 BM25/最终 hybrid 分层、过期结果被抑制、limit 为 2、结束前等待拆题/检索/日志完成以及 Origin 拒绝逻辑。
 
 ```bash
 npm test -- server/realtime/translation-proxy.test.ts

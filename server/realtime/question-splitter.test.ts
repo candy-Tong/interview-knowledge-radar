@@ -12,18 +12,37 @@ describe("splitInterviewQuestions", () => {
       choices: [{
         message: {
           content: JSON.stringify({ questions: [
-            { text: "Please introduce yourself, focusing on frontend leadership." },
-            { text: "What was your role in the Finance Customer Complaint Agent project?" },
+            {
+              text: "Please introduce yourself, focusing on frontend leadership.",
+              retrievalQuery: "Please introduce yourself, focusing on frontend leadership.",
+            },
+            {
+              text: "What was your role in the Agent project?",
+              retrievalQuery:
+                "What was your role in the Finance Customer Complaint Agent project?",
+            },
           ] }),
         },
       }],
     }), { status: 200 })));
 
-    await expect(splitInterviewQuestions("Please introduce yourself and explain your Agent role."))
+    await expect(splitInterviewQuestions({
+      transcript: "Please introduce yourself and explain your Agent role.",
+      recentInterviewerTurns: [
+        "Let's focus on the Finance Customer Complaint Agent project.",
+      ],
+    }))
       .resolves.toEqual({
         questions: [
-          "Please introduce yourself, focusing on frontend leadership.",
-          "What was your role in the Finance Customer Complaint Agent project?",
+          {
+            text: "Please introduce yourself, focusing on frontend leadership.",
+            retrievalQuery: "Please introduce yourself, focusing on frontend leadership.",
+          },
+          {
+            text: "What was your role in the Agent project?",
+            retrievalQuery:
+              "What was your role in the Finance Customer Complaint Agent project?",
+          },
         ],
         usedFallback: false,
       });
@@ -34,12 +53,53 @@ describe("splitInterviewQuestions", () => {
       throw new Error("connection refused");
     }));
 
-    await expect(splitInterviewQuestions("  Tell me   about your monorepo. "))
+    await expect(splitInterviewQuestions({
+      transcript: "  Tell me   about your monorepo. ",
+      recentInterviewerTurns: [],
+    }))
       .resolves.toEqual({
-        questions: ["Tell me about your monorepo."],
+        questions: [{
+          text: "Tell me about your monorepo.",
+          retrievalQuery: "Tell me about your monorepo.",
+        }],
         usedFallback: true,
         fallbackReason: "connection refused",
       });
+  });
+
+  it("does not copy an earlier context question into the current turn", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      choices: [{
+        message: {
+          content: JSON.stringify({ questions: [
+            {
+              text: "What problem was it solving?",
+              retrievalQuery:
+                "What problem was the Finance Customer Complaint Agent solving?",
+            },
+            {
+              text: "What was your role specifically?",
+              retrievalQuery:
+                "What was your role specifically in the Finance Customer Complaint Agent project?",
+            },
+          ] }),
+        },
+      }],
+    }), { status: 200 })));
+
+    await expect(splitInterviewQuestions({
+      transcript: "Good, and what was your role specifically?",
+      recentInterviewerTurns: [
+        "Let's discuss the complaint Agent. What problem was it solving?",
+      ],
+    })).resolves.toMatchObject({
+      questions: [{
+        text: "What was your role specifically?",
+        retrievalQuery:
+          "What was your role specifically in the Finance Customer Complaint Agent project?",
+      }],
+      usedFallback: false,
+    });
   });
 });
 

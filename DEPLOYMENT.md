@@ -6,7 +6,7 @@
 
 - Chrome 负责系统音频共享和界面展示。
 - Node.js 在 `127.0.0.1:8787` 提供静态页面、REST API 和 WebSocket 代理。
-- llama.cpp 在 `127.0.0.1:18080` 运行 Qwen3.5-2B，把一轮识别拆成独立问题。
+- llama.cpp 在 `127.0.0.1:18080` 运行 Qwen3.5-2B，把一轮识别拆成独立问题，并用最近三轮面试官原文补全检索 query 的项目与指代。
 - Docker 中的 PostgreSQL + pgvector 在 `localhost:54329` 保存完整知识、BM25 词项和向量。
 - Node.js 使用服务端 `.env` 中的凭据访问阿里云实时翻译、实时 ASR 和 embedding 接口。
 
@@ -129,6 +129,8 @@ LOCAL_QUESTION_MODEL=qwen3.5-2b
 LOCAL_QUESTION_MODEL_TIMEOUT_MS=6000
 ```
 
+`OPENAI_*` 和 `QUESTION_REWRITE_EVAL_*` 测评变量只在开发者执行 LLM 语义测评时需要，不是生产服务启动条件；配置方法见 `CONTRIBUTING.md`。
+
 不要把真实值粘贴到聊天、日志、README 或部署报告。Agent 可以运行下面的检查；该命令只输出缺失的变量名，不输出变量值：
 
 ```bash
@@ -179,7 +181,7 @@ listening on http://127.0.0.1:18080
 curl --fail http://127.0.0.1:18080/v1/models
 ```
 
-模型暂时不可用时，应用会回退为“整个 turn 当作一题”，但正式部署验收仍要求该健康检查通过。
+模型暂时不可用时，应用会回退为“整个 turn 当作一题，并直接使用当前原文检索”，但正式部署验收仍要求该健康检查通过。
 
 ### 5. 启动 PostgreSQL
 
@@ -312,9 +314,10 @@ NODE
 5. 在左侧“面试官正在问什么”卡片第二行点击“监听”。
 6. 用户在 Chrome 弹窗中选择屏幕、窗口或标签页，并开启“同时分享系统音频”。
 7. 选择“翻译模式”并播放一段包含两个独立问题的英文，确认中文翻译完成前左侧已出现 Q1/Q2，两题分别有最多两条完整知识。
-8. 结束会话后切换“普通模式”，确认只出现原始 ASR 转写，不显示中文同传，并仍返回最多两条知识。
-9. 点击 Q1/Q2 确认中右两栏切换到各自绑定知识；静音超过 5 秒才生成下一行，相关知识自动滚动到高亮句。
-10. 结束一次会话后检查 `runtime-logs/$(date -u +%F).jsonl`，确认包含 `recognition.turn.final`、`question.split.completed` 和每个 `questionId` 的 `knowledge.retrieval.completed`，且没有 API Key 或连接凭据。
+8. 先明确讨论一个项目，再播放 “What was your role specifically?”，确认页面仍显示当前追问，而运行日志中的 `retrievalQuery` 已补全正确项目且召回对应项目知识。
+9. 结束会话后切换“普通模式”，确认只出现原始 ASR 转写，不显示中文同传，并仍返回最多两条知识。
+10. 点击 Q1/Q2 确认中右两栏切换到各自绑定知识；静音超过 5 秒才生成下一行，相关知识自动定位到高亮句且不播放滚动动画。
+11. 结束一次会话后检查 `runtime-logs/$(date -u +%F).jsonl`，确认包含 `recognition.turn.final`、`question.split.completed`（含展示问题和 `retrievalQuery`）及每个 `questionId` 的 `knowledge.retrieval.completed`，且没有 API Key 或连接凭据。
 
 第 5～6 步需要真实用户手势和系统权限，Agent 不得绕过授权。页面不会请求麦克风。
 

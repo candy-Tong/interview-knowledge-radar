@@ -37,7 +37,8 @@
 - 模式切换位于左侧面试官卡片标题右侧，监听状态和动作位于下一行；全局顶栏只保留品牌、视图 Tab 和服务就绪状态。
 - `knowledge-base/` 是递归扫描的知识根目录；一份知识源 Markdown 对应一条完整知识，各层 `AGENTS.md` 不参与入库。
 - 一次检索最多返回两条知识；中栏和右栏各展示一条完整知识。
-- 一个 5 秒 turn 可包含多个独立问题；本地 Qwen3.5-2B 通过 llama.cpp 拆题，每个问题独立绑定最多两条知识。
+- 一个 5 秒 turn 可包含多个独立问题；本地 Qwen3.5-2B 通过 llama.cpp 拆题，并结合最近三轮面试官原文把省略项目/指代的追问改写成可独立检索的 query；每个问题独立绑定最多两条知识。
+- UI 展示拆分后的当前问题原意，BM25 与 hybrid 检索使用补全上下文后的 `retrievalQuery`；历史轮次只能补全指代，不能替代当前问题或向独立问题注入项目。
 - 连续语音只有静音超过 5 秒才形成新的面试官行；说话过程中用增量原文节流拆题和刷新同一行的 BM25 知识，ASR 完成后立即用完整原文校准草稿，不等待翻译。
 - 说话中的问题草稿只做本地 BM25 召回；turn 最终确定后，每个问题再做一次 BM25 + pgvector 混合检索。
 - 实时识别、翻译、合并后的问题和知识召回明细写入本地按日 JSONL 运行日志，使用 `sessionId`/`turnId` 关联以供复盘；日志目录不得提交 Git。
@@ -92,7 +93,7 @@ npm run dev
 - 新增 WebSocket 入口时保持路径白名单和 loopback Origin 校验。
 - 所有 SQL 值使用参数化查询；结构性 SQL 必须可审查且避免拼接用户输入。
 - 不扩大 `HOST=127.0.0.1` 的默认监听范围，除非用户明确要求并理解局域网暴露风险。
-- 音频按当前模式发送给阿里云 LiveTranslate 或 Qwen3-ASR；问题拆分只访问 loopback 的 llama.cpp；完整知识和最终问题查询会用于阿里云向量生成。变更数据流时同步更新隐私说明。
+- 音频按当前模式发送给阿里云 LiveTranslate 或 Qwen3-ASR；问题拆分和上下文改写只访问 loopback 的 llama.cpp；完整知识和最终改写 query 会用于阿里云向量生成。固定问题改写测评及改写结果会发送给 `.env` 配置的 OpenAI-compatible LLM 进行判分，测评数据不得包含真实面试隐私。变更数据流时同步更新隐私说明。
 - 运行日志含面试识别原文、翻译、查询和召回知识元数据，属于敏感本地数据；不得记录 API Key、Authorization、数据库凭据，也不得自动上传或提交。
 
 ## 验证要求
@@ -108,6 +109,7 @@ npm run build
 
 - 数据库/schema：`npm run db:init`，必要时在测试库重复执行确认幂等。
 - 知识导入/检索：`npm run db:ingest`，再检查 `/api/knowledge/stats`、`/api/knowledge` 和 `/api/search`。
-- 实时协议：运行 `server/realtime/translation-proxy.test.ts`，确认两种模式选择正确上游、普通模式无翻译事件、复合 turn 拆为多问题且每题独立召回、草稿 BM25 先于最终 hybrid、过期结果不会覆盖新结果，并且相邻 ASR 片段只产生一行。
+- 实时协议：运行 `server/realtime/translation-proxy.test.ts`，确认两种模式选择正确上游、普通模式无翻译事件、复合 turn 拆为多问题且每题独立召回、跨 turn 追问使用上一轮项目补全后的 query、草稿 BM25 先于最终 hybrid、过期结果不会覆盖新结果，并且相邻 ASR 片段只产生一行。
+- 问题改写：本地模型启动后运行 `npm run eval:question-rewrite`，由 `.env` 中 `OPENAI_*` 指定的 LLM 裁判验证上下文、意图保持和无幻觉，通过率不得低于配置阈值。
 - 前端布局：在 Chrome 中确认页面 `scrollWidth/scrollHeight` 不超过视口，内部滚动区仍可滚动。
 - 音频链路：必须由真实用户手势触发共享权限；不要用自动化绕过浏览器授权。

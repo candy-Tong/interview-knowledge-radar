@@ -1,6 +1,6 @@
 # Interview Knowledge Radar
 
-Interview Knowledge Radar 是本地优先的实时面试辅助工具。Chrome 只采集用户主动共享的系统音频；翻译模式通过阿里云实时翻译输出英文原文与中文同传，普通模式通过独立实时 ASR 只输出原始转写。本地 Qwen3.5-2B 会把一轮语音拆成独立问题，每题再用 PostgreSQL 中的 BM25 和 pgvector 召回最多两条完整知识。
+Interview Knowledge Radar 是本地优先的实时面试辅助工具。Chrome 只采集用户主动共享的系统音频；翻译模式通过阿里云实时翻译输出英文原文与中文同传，普通模式通过独立实时 ASR 只输出原始转写。本地 Qwen3.5-2B 会把一轮语音拆成独立问题，并用最近的面试上下文补全“这个项目”“你的职责”等追问；每题再用 PostgreSQL 中的 BM25 和 pgvector 召回最多两条完整知识。
 
 ## 核心能力
 
@@ -8,6 +8,7 @@ Interview Knowledge Radar 是本地优先的实时面试辅助工具。Chrome �
 - **系统音频采集**：只使用 Chrome 屏幕/窗口/标签页共享，不请求麦克风。
 - **5 秒问题合并**：连续 ASR 片段合并为一条面试官问题，静音超过 5 秒才开始下一条。
 - **本地复合问题拆分**：llama.cpp 运行 Qwen3.5-2B Q4_K_M，一轮中的多个问题分别绑定自己的知识结果。
+- **上下文问题改写**：页面保留当前问题原意，检索 query 自动补全最近三轮中的项目和指代，避免“你的职责”误召回成通用职位知识。
 - **说话中提前检索**：增量原文经本地拆题后立即做 BM25，不等待中文翻译完成；5 秒定稿后再做混合检索。
 - **混合检索**：BM25 词法召回和 1024 维向量召回通过 RRF 排序，每次最多返回 2 条知识。
 - **完整知识展示**：一份知识源 Markdown 对应一条知识，正文不切分。
@@ -25,7 +26,7 @@ flowchart LR
   B -->|普通模式| J[Qwen3-ASR 原始语音识别]
   C --> K[增量识别原文]
   J --> K
-  K --> L[本地 Qwen3.5-2B 拆分 Q1/Q2]
+  K --> L[本地 Qwen3.5-2B 拆分并结合最近三轮改写]
   L -->|说话中| E[BM25 词法召回]
   K --> D[5 秒窗口合并为一个 turn]
   D --> L
@@ -132,7 +133,12 @@ npm run db:ingest:bm25
 | `DASHSCOPE_EMBEDDING_MODEL` | `text-embedding-v4` | 1024 维向量模型 |
 | `LOCAL_QUESTION_MODEL_URL` | `http://127.0.0.1:18080/v1` | llama.cpp OpenAI-compatible 地址 |
 | `LOCAL_QUESTION_MODEL` | `qwen3.5-2b` | 本地模型 alias |
-| `LOCAL_QUESTION_MODEL_TIMEOUT_MS` | `6000` | 拆题超时，超时回退整段检索 |
+| `LOCAL_QUESTION_MODEL_TIMEOUT_MS` | `6000` | 拆题/改写超时，超时回退当前原文检索 |
+| `OPENAI_BASE_URL` | OpenAI-compatible `/v1` 地址 | 问题改写 LLM 裁判服务地址 |
+| `OPENAI_API_KEY` | 开发者配置 | 问题改写 LLM 裁判凭据，仅测评脚本读取 |
+| `OPENAI_MODEL` | 开发者配置 | 问题改写 LLM 裁判模型 |
+| `QUESTION_REWRITE_EVAL_MIN_PASS_RATE` | `0.8` | 固定测评最低通过率 |
+| `QUESTION_REWRITE_EVAL_TIMEOUT_MS` | `120000` | LLM 裁判请求超时 |
 | `HOST` | `127.0.0.1` | Node.js 监听地址 |
 | `PORT` | `8787` | 页面、API 和 WebSocket 端口 |
 | `RUNTIME_LOG_DIR` | `runtime-logs` | 本地识别与召回复盘日志目录 |
@@ -146,7 +152,7 @@ npm run db:ingest:bm25
 - `recognition.partial` / `recognition.segment.completed`：增量识别和 ASR 完整片段。
 - `translation.partial` / `translation.segment.completed`：增量及完整翻译片段。
 - `recognition.turn.final`：5 秒规则合并后的最终原文和翻译。
-- `question.split.*`：拆题输入、版本、耗时、问题列表和是否回退整段。
+- `question.split.*`：当前 turn、版本、耗时、展示问题、改写后的 `retrievalQuery` 和是否回退原文。
 - `knowledge.retrieval.*`：`questionId`、BM25/hybrid 阶段、耗时以及命中知识的排名与分数。
 - `session.*` / `speech.*`：会话生命周期、语音起止和错误。
 
@@ -170,6 +176,7 @@ tail -n 50 runtime-logs/$(date -u +%F).jsonl
 | `npm run db:init` | 幂等初始化 PostgreSQL/pgvector schema |
 | `npm run db:ingest` | 导入完整知识并生成 BM25/向量索引 |
 | `npm run db:ingest:bm25` | 仅生成 BM25 索引 |
+| `npm run eval:question-rewrite` | 本地生成固定案例改写，并用 OpenAI-compatible LLM 裁判评分 |
 
 ## API
 
@@ -186,7 +193,8 @@ tail -n 50 runtime-logs/$(date -u +%F).jsonl
 
 - 系统音频只有在用户通过 Chrome 授权后才会采集；翻译模式发送给 LiveTranslate，普通模式发送给独立 Qwen3-ASR-Realtime。
 - Markdown 原文、BM25 词项、向量和检索结果保存在本机 PostgreSQL。
-- 拆题仅发送到本机 `127.0.0.1` 的 llama.cpp；说话中的草稿只做本地 BM25，最终问题才会发送给阿里云生成查询向量。
+- 拆题和上下文问题改写仅发送到本机 `127.0.0.1` 的 llama.cpp；说话中的草稿只用改写 query 做本地 BM25，最终改写 query 才会发送给阿里云生成查询向量。
+- `npm run eval:question-rewrite` 会把仓库内固定案例和本地改写结果发送给 `.env` 配置的 OpenAI-compatible LLM 判分；固定案例禁止包含真实面试内容和隐私。
 - 完整知识在导入时发送给阿里云生成向量。
 - 识别原文、翻译和知识召回元数据会写入本机 `runtime-logs/`，用于后续复盘优化，不会自动上传。
 - API Key 不进入前端包，由本地 Node.js 服务代理云端请求。
@@ -194,4 +202,4 @@ tail -n 50 runtime-logs/$(date -u +%F).jsonl
 
 ## 开发指南
 
-根目录 [AGENTS.md](./AGENTS.md) 记录产品不变量、代码规范、安全边界和验证要求。每个源码嵌套目录还有更具体的 `AGENTS.md`；编码 Agent 修改文件前应从根目录向目标目录逐层读取并遵守。
+根目录 [AGENTS.md](./AGENTS.md) 记录产品不变量、代码规范、安全边界和验证要求。每个源码嵌套目录还有更具体的 `AGENTS.md`；编码 Agent 修改文件前应从根目录向目标目录逐层读取并遵守。开发环境、LLM 测评和贡献流程见 [CONTRIBUTING.md](./CONTRIBUTING.md)。

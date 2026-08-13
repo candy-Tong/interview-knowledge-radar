@@ -8,7 +8,7 @@ import {
   createRealtimeWebSocketServer,
   handleRealtimeUpgrade,
   isAllowedBrowserOrigin,
-  stabilizeQuestionTexts,
+  stabilizeQuestions,
 } from "./translation-proxy.js";
 
 type JsonEvent = {
@@ -27,6 +27,11 @@ type JsonEvent = {
 
 const openServers: Server[] = [];
 const openSockets: WebSocket[] = [];
+
+/** Creates one display/search question pair for realtime test fixtures. */
+function resolvedQuestion(text: string, retrievalQuery = text) {
+  return { text, retrievalQuery };
+}
 
 /** Starts an HTTP server on an ephemeral loopback port. */
 async function listen(server: Server) {
@@ -71,37 +76,180 @@ describe("isAllowedBrowserOrigin", () => {
   });
 });
 
-describe("stabilizeQuestionTexts", () => {
+describe("stabilizeQuestions", () => {
   it("keeps completed draft questions while the trailing question changes", () => {
-    expect(stabilizeQuestionTexts(
+    expect(stabilizeQuestions(
       {
-        questions: ["Introduce yourself.", "Explain your agent."],
+        questions: [
+          resolvedQuestion("Introduce yourself."),
+          resolvedQuestion("Explain your agent."),
+        ],
         usedFallback: false,
       },
       {
-        questions: ["Please introduce yourself.", "Explain your complaint agent."],
+        questions: [
+          resolvedQuestion("Please introduce yourself."),
+          resolvedQuestion("Explain your complaint agent."),
+        ],
         usedFallback: false,
       },
       false,
-    )).toEqual(["Introduce yourself.", "Explain your complaint agent."]);
+    )).toEqual([
+      resolvedQuestion("Introduce yourself."),
+      resolvedQuestion("Explain your complaint agent."),
+    ]);
   });
 
   it("accepts the complete final split", () => {
-    expect(stabilizeQuestionTexts(
+    expect(stabilizeQuestions(
       {
-        questions: ["Introduce yourself.", "Explain your agent."],
+        questions: [
+          resolvedQuestion("Introduce yourself."),
+          resolvedQuestion("Explain your agent."),
+        ],
         usedFallback: false,
       },
       {
-        questions: ["Please introduce yourself.", "Explain your complaint agent."],
+        questions: [
+          resolvedQuestion("Please introduce yourself."),
+          resolvedQuestion("Explain your complaint agent."),
+        ],
         usedFallback: false,
       },
       true,
-    )).toEqual(["Please introduce yourself.", "Explain your complaint agent."]);
+    )).toEqual([
+      resolvedQuestion("Please introduce yourself."),
+      resolvedQuestion("Explain your complaint agent."),
+    ]);
   });
 });
 
 describe("translation proxy", () => {
+  it("rewrites a follow-up retrieval with the previous project context", async () => {
+    const upstreamHttpServer = createServer();
+    const upstreamServer = new WebSocketServer({ server: upstreamHttpServer });
+    const upstreamPort = await listen(upstreamHttpServer);
+    let upstreamSocket: WebSocket | undefined;
+
+    upstreamServer.on("connection", (socket) => {
+      upstreamSocket = socket;
+      openSockets.push(socket);
+      socket.on("message", (data) => {
+        const event = JSON.parse(data.toString()) as JsonEvent;
+        if (event.type === "session.update") {
+          socket.send(JSON.stringify({ type: "session.updated" }));
+        }
+      });
+    });
+
+    const searchQueries: string[] = [];
+    const runtimeLogEntries: RuntimeLogEntry[] = [];
+    const proxyHttpServer = createServer();
+    const proxyServer = createRealtimeWebSocketServer({
+      upstreamUrl: `ws://127.0.0.1:${upstreamPort}`,
+      apiKey: "test-key",
+      turnGapMs: 15,
+      progressiveSearchIntervalMs: 0,
+      runtimeLog: async (entry) => {
+        runtimeLogEntries.push(entry);
+      },
+      draftSearch: async () => [],
+      search: async (query) => {
+        searchQueries.push(query);
+        return [];
+      },
+      splitQuestions: async ({ transcript, recentInterviewerTurns }) => {
+        const hasComplaintContext = recentInterviewerTurns.some(
+          (turn) => turn.includes("customer complaint agent"),
+        );
+        if (transcript.includes("role specifically")) {
+          return {
+            questions: [{
+              text: "What was your role specifically?",
+              retrievalQuery: hasComplaintContext
+                ? "What was your specific role in the Finance Customer Complaint Agent project?"
+                : "What was your role specifically?",
+            }],
+            usedFallback: false,
+          };
+        }
+        return {
+          questions: [{ text: transcript, retrievalQuery: transcript }],
+          usedFallback: false,
+        };
+      },
+    });
+    proxyHttpServer.on("upgrade", (request, socket, head) => {
+      handleRealtimeUpgrade(proxyServer, request, socket, head);
+    });
+    const proxyPort = await listen(proxyHttpServer);
+    const browserSocket = new WebSocket(
+      `ws://127.0.0.1:${proxyPort}/api/realtime?mode=translation`,
+      { headers: { Origin: "http://localhost:5173" } },
+    );
+    openSockets.push(browserSocket);
+    await once(browserSocket, "open");
+    await waitForEvent(browserSocket, (event) => event.type === "session.ready");
+
+    const firstKnowledge = waitForEvent(
+      browserSocket,
+      (event) =>
+        event.type === "question.knowledge.results" &&
+        event.isFinal === true &&
+        event.query?.includes("customer complaint agent project") === true,
+    );
+    upstreamSocket?.send(JSON.stringify({
+      type: "conversation.item.input_audio_transcription.completed",
+      item_id: "context-source",
+      transcript: "Now let's focus on your customer complaint agent project.",
+    }));
+    upstreamSocket?.send(JSON.stringify({ type: "input_audio_buffer.speech_stopped" }));
+    await firstKnowledge;
+
+    const questions = waitForEvent(
+      browserSocket,
+      (event) =>
+        event.type === "questions.updated" &&
+        event.questions?.[0]?.text === "What was your role specifically?",
+    );
+    const followUpKnowledge = waitForEvent(
+      browserSocket,
+      (event) =>
+        event.type === "question.knowledge.results" &&
+        event.isFinal === true &&
+        event.query ===
+          "What was your specific role in the Finance Customer Complaint Agent project?",
+    );
+    upstreamSocket?.send(JSON.stringify({ type: "input_audio_buffer.speech_started" }));
+    upstreamSocket?.send(JSON.stringify({
+      type: "conversation.item.input_audio_transcription.completed",
+      item_id: "follow-up-source",
+      transcript: "Good, and what was your role specifically?",
+    }));
+    upstreamSocket?.send(JSON.stringify({ type: "input_audio_buffer.speech_stopped" }));
+
+    await expect(questions).resolves.toMatchObject({
+      questions: [{ text: "What was your role specifically?" }],
+    });
+    await expect(followUpKnowledge).resolves.toMatchObject({
+      query: "What was your specific role in the Finance Customer Complaint Agent project?",
+    });
+    expect(searchQueries).toContain(
+      "What was your specific role in the Finance Customer Complaint Agent project?",
+    );
+    expect(runtimeLogEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        event: "question.split.completed",
+        transcript: "Good, and what was your role specifically?",
+        questions: [expect.objectContaining({
+          text: "What was your role specifically?",
+          retrievalQuery:
+            "What was your specific role in the Finance Customer Complaint Agent project?",
+        })],
+      }),
+    ]));
+  });
+
   it("rejects unsupported realtime modes before creating an upstream session", async () => {
     const proxyHttpServer = createServer();
     const proxyServer = createRealtimeWebSocketServer({
@@ -509,7 +657,7 @@ describe("translation proxy", () => {
       apiKey: "test-key",
       progressiveSearchIntervalMs: 0,
       draftSearch: async () => [],
-      splitQuestions: async (transcript) => {
+      splitQuestions: async ({ transcript }) => {
         splitCalls.push(transcript);
         activeSplitCalls += 1;
         maximumActiveSplitCalls = Math.max(maximumActiveSplitCalls, activeSplitCalls);
@@ -518,7 +666,7 @@ describe("translation proxy", () => {
             markFirstSplitStarted();
             await firstSplitBlocked;
           }
-          return { questions: [transcript], usedFallback: false };
+          return { questions: [resolvedQuestion(transcript)], usedFallback: false };
         } finally {
           activeSplitCalls -= 1;
         }
@@ -605,7 +753,7 @@ describe("translation proxy", () => {
       progressiveSearchIntervalMs: 0,
       draftSearch: async () => [],
       search: async () => [],
-      splitQuestions: async (transcript, signal?: AbortSignal) => {
+      splitQuestions: async ({ transcript }, signal?: AbortSignal) => {
         splitCallCount += 1;
         activeSplitCalls += 1;
         maximumActiveSplitCalls = Math.max(maximumActiveSplitCalls, activeSplitCalls);
@@ -621,7 +769,7 @@ describe("translation proxy", () => {
               }),
             ]);
           }
-          return { questions: [transcript], usedFallback: false };
+          return { questions: [resolvedQuestion(transcript)], usedFallback: false };
         } finally {
           activeSplitCalls -= 1;
         }
@@ -727,8 +875,8 @@ describe("translation proxy", () => {
       },
       splitQuestions: async () => ({
         questions: [
-          "Please introduce yourself.",
-          "Explain your complaint agent.",
+          resolvedQuestion("Please introduce yourself."),
+          resolvedQuestion("Explain your complaint agent."),
         ],
         usedFallback: false,
       }),
