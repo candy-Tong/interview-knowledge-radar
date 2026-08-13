@@ -70,7 +70,7 @@ export function KnowledgeRadar({ question }: KnowledgeRadarProps) {
             contentHeight: scrollRegion.scrollHeight,
             viewportHeight: scrollRegion.clientHeight,
           }),
-          behavior: "smooth",
+          behavior: "auto",
         });
       });
     });
