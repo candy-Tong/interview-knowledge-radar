@@ -50,7 +50,7 @@ export function ControlDock({
           type="button"
         >
           <Languages size={12} />
-          翻译模式
+          <span>翻译模式</span>
         </button>
         <button
           aria-pressed={mode === RealtimeMode.Transcription}
@@ -61,7 +61,7 @@ export function ControlDock({
           type="button"
         >
           <AudioLines size={12} />
-          普通模式
+          <span>普通模式</span>
         </button>
       </div>
       <div className="capture-state">
@@ -72,24 +72,30 @@ export function ControlDock({
         </div>
       </div>
       <div className="dock-actions">
-        <button className="clear-button" onClick={onClear} type="button">
+        <button aria-label="清空当前会话" className="clear-button" onClick={onClear} type="button">
           <RotateCcw size={15} />
-          清空
+          <span>清空</span>
         </button>
         {isActive ? (
-          <button className="capture-button stop" onClick={() => void onStop()} type="button">
+          <button
+            aria-label="结束系统音频监听"
+            className="capture-button stop"
+            onClick={() => void onStop()}
+            type="button"
+          >
             <CircleStop size={18} />
-            结束
+            <span>结束</span>
           </button>
         ) : (
           <button
+            aria-label={canStart ? "监听系统音频" : "监听配置未完成"}
             className="capture-button"
             disabled={!canStart}
             onClick={() => void onStart()}
             type="button"
           >
             <Radio size={18} />
-            {canStart ? "监听系统音频" : "配置未完成"}
+            <span>{canStart ? "监听系统音频" : "配置未完成"}</span>
           </button>
         )}
       </div>

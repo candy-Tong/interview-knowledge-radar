@@ -1,16 +1,16 @@
 .control-dock {
-  display: flex;
+  display: grid;
   min-width: 0;
   align-items: center;
-  gap: 7px;
-  padding: 4px 5px 4px 8px;
-  border: 1px solid rgba(104, 87, 112, 0.18);
-  background: rgba(255, 251, 247, 0.92);
-  box-shadow: 0 8px 22px rgba(111, 88, 119, 0.1);
-  backdrop-filter: blur(18px);
+  grid-template-areas: "state mode actions";
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 5px;
+  padding-top: 6px;
+  border-top: 1px dashed rgba(104, 87, 112, 0.16);
 }
 
 .mode-switch {
+  grid-area: mode;
   display: flex;
   flex: 0 0 auto;
   gap: 2px;
@@ -53,6 +53,7 @@
 }
 
 .capture-state {
+  grid-area: state;
   display: flex;
   min-width: 0;
   align-items: center;
@@ -87,7 +88,7 @@
 
 .capture-state small {
   overflow: hidden;
-  max-width: 160px;
+  max-width: 110px;
   color: #8b818e;
   font-size: 7px;
   text-overflow: ellipsis;
@@ -98,6 +99,7 @@
   display: flex;
   align-items: center;
   gap: 4px;
+  grid-area: actions;
 }
 
 .dock-actions button {
@@ -118,7 +120,7 @@
 }
 
 .capture-button {
-  min-width: 112px;
+  min-width: 94px;
   padding: 8px 10px;
   color: #405751;
   background: #a9ded2;
@@ -133,16 +135,21 @@
   50% { opacity: 0.45; }
 }
 
-@media (max-width: 980px) {
+@container (max-width: 390px) {
   .capture-state small,
-  .clear-button span {
+  .clear-button span,
+  .capture-button span,
+  .mode-switch button span {
     display: none;
   }
 
   .mode-switch button {
     width: 25px;
     padding-inline: 6px;
-    overflow: hidden;
-    white-space: nowrap;
+  }
+
+  .capture-button {
+    min-width: 34px;
+    padding-inline: 8px;
   }
 }

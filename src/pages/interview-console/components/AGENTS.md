@@ -2,8 +2,8 @@
 
 ## 组件边界
 
-- `ControlDock`：显示会话状态并发出 start/stop/clear 用户动作。
-- `TranscriptDeck`：展示可选择的逻辑 turn 列表。
+- `ControlDock`：嵌入转写卡片标题区，显示模式、会话状态并发出 start/stop/clear 用户动作。
+- `TranscriptDeck`：拥有转写卡片布局和控制区 slot，展示可选择的逻辑 turn 列表。
 - `KnowledgeRadar`：展示所选 turn 的最多两条检索知识并自动定位相关句。
 - `KnowledgeOverview`：自行读取并展示全部完整知识。
 
@@ -21,4 +21,3 @@
 - 所有 grid/flex 子项显式考虑 `min-width: 0` 和 `min-height: 0`，否则内部滚动会撑破单屏。
 - 滚动区使用 `overscroll-behavior: contain`，避免滚动传递到页面。
 - 复用根级 `--paper`、`--ink`、`--acid`、`--amber`、`--lavender`、`--rule` 等变量。
-

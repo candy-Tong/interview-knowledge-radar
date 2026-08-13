@@ -1,4 +1,5 @@
 import { AudioLines, Check, Languages } from "lucide-react";
+import type { ReactNode } from "react";
 import type { TranscriptSegment } from "../../types";
 import { RealtimeMode } from "../../types";
 import "./style.css";
@@ -6,24 +7,31 @@ import "./style.css";
 type TranscriptDeckProps = {
   segments: TranscriptSegment[];
   mode: RealtimeMode;
+  controls: ReactNode;
   selectedSegmentId?: string;
   onSelect: (itemId: string) => void;
 };
 
 /** Renders finalized and tentative interviewer turns as a readable live transcript. */
-export function TranscriptDeck({ mode, segments, selectedSegmentId, onSelect }: TranscriptDeckProps) {
+export function TranscriptDeck({
+  controls,
+  mode,
+  segments,
+  selectedSegmentId,
+  onSelect,
+}: TranscriptDeckProps) {
   const visibleSegments = segments.slice().reverse();
   return (
     <section className="transcript-deck" aria-label="面试官实时转写">
       <div className="panel-heading">
-        <div>
-          <span className="panel-kicker">01 / LIVE TRANSCRIPT</span>
-          <h2>面试官正在问什么</h2>
-        </div>
-        <div className="transcript-mode-label">
-          <span>{mode === RealtimeMode.Translation ? "翻译模式" : "普通模式"}</span>
+        <div className="transcript-heading-top">
+          <div>
+            <span className="panel-kicker">01 / LIVE TRANSCRIPT</span>
+            <h2>面试官正在问什么</h2>
+          </div>
           <AudioLines size={22} strokeWidth={1.5} />
         </div>
+        {controls}
       </div>
 
       <div className="transcript-list" aria-live="polite">

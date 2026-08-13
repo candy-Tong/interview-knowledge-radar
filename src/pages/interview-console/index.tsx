@@ -123,24 +123,26 @@ export function InterviewConsolePage() {
               <i />
             </div>
           </div>
-          <ControlDock
-            audioSourceLabel={session.audioSourceLabel}
-            canStart={canStart}
-            errorMessage={session.errorMessage}
-            mode={session.mode}
-            onClear={session.clear}
-            onModeChange={session.setMode}
-            onStart={session.start}
-            onStop={session.stop}
-            phase={session.phase}
-            readinessMessage={getReadinessMessage(health, stats)}
-          />
         </div>
       </header>
 
       {activeView === ConsoleView.Interview ? (
         <div className="workspace-grid" role="tabpanel">
           <TranscriptDeck
+            controls={
+              <ControlDock
+                audioSourceLabel={session.audioSourceLabel}
+                canStart={canStart}
+                errorMessage={session.errorMessage}
+                mode={session.mode}
+                onClear={session.clear}
+                onModeChange={session.setMode}
+                onStart={session.start}
+                onStop={session.stop}
+                phase={session.phase}
+                readinessMessage={getReadinessMessage(health, stats)}
+              />
+            }
             mode={session.mode}
             onSelect={setSelectedSegmentId}
             segments={session.segments}
