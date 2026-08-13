@@ -4,7 +4,7 @@
 
 - `index.tsx` 组装顶部品牌、视图 Tab、服务就绪状态和内容区，并把会话控制区作为 slot 交给左侧转写卡片排版。
 - `useInterviewSession()` 拥有音频、WebSocket、转写和检索结果状态；页面不要复制该状态机。
-- `selectedSegmentId` 决定当前知识结果；新转写到达时默认选择最新一行，用户可点击历史行切换。
+- `selectedSegmentId` + `selectedQuestionId` 决定当前知识结果；新转写到达时默认选择最新问题，用户可切换历史 turn 或其中的 Q1/Q2。
 - `ConsoleView` 只控制“面试辅助/知识库总览”局部视图，不需要路由或全局 store。
 - `RealtimeMode` 在 `useInterviewSession()` 中管理；只在空闲时切换，并作为 WebSocket query 固定本次会话上游。
 - 服务就绪需要数据库、阿里云配置、非空知识索引且 `vectors === chunks`。
@@ -12,6 +12,7 @@
 ## 数据契约
 
 - `TranscriptSegment` 是一个合并后的面试官 turn，不是单个 ASR fragment。
+- `InterviewQuestion` 是 turn 中的独立可检索问题，拥有自己的最多两条知识和错误状态。
 - 每个 `TranscriptSegment` 保存产生它的 mode，历史行是否展示中文同传不能依赖当前全局 mode。
 - `KnowledgeResult` 包含完整正文、BM25/vector/RRF 信号和相关句偏移。
 - `KnowledgeDocument` 用于总览，返回完整正文但不需要检索分数。
@@ -30,7 +31,7 @@
 
 - 顶部两项 Tab 可往返切换且 `aria-selected` 正确。
 - 服务未就绪时监听按钮禁用并显示第一个可操作原因。
-- 新问题自动选中；点击旧问题切换对应知识。
+- 新 turn 的最新拆分问题自动选中；点击任意 Qn 切换对应知识。
 - 面试官原文和中文翻译可用鼠标选择，并可通过系统快捷键复制。
 - body 尺寸不超过 viewport；每个长内容区域可以独立上下滚动。
 - 知识相关句进入视口且标记不改变原文字符顺序。

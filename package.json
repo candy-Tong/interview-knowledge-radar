@@ -7,6 +7,7 @@
     "dev": "concurrently -k -n web,server -c cyan,yellow \"vite\" \"tsx watch server/index.ts\"",
     "build": "tsc --noEmit && vite build",
     "start": "NODE_ENV=production tsx server/index.ts",
+    "model:start": "bash scripts/start-question-model.sh",
     "db:init": "tsx scripts/init-db.ts",
     "db:ingest": "tsx scripts/ingest-knowledge.ts",
     "db:ingest:bm25": "tsx scripts/ingest-knowledge.ts --bm25-only",

@@ -13,6 +13,9 @@ const envSchema = z.object({
     .string()
     .default("qwen3.5-livetranslate-flash-realtime"),
   DASHSCOPE_ASR_MODEL: z.string().default("qwen3-asr-flash-realtime"),
+  LOCAL_QUESTION_MODEL_URL: z.string().url().default("http://127.0.0.1:18080/v1"),
+  LOCAL_QUESTION_MODEL: z.string().min(1).default("qwen3.5-2b"),
+  LOCAL_QUESTION_MODEL_TIMEOUT_MS: z.coerce.number().int().positive().default(6_000),
   HOST: z.string().default("127.0.0.1"),
   PORT: z.coerce.number().int().positive().default(8787),
   RUNTIME_LOG_DIR: z.string().min(1).default("runtime-logs"),

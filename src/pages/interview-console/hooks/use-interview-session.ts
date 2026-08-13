@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { KnowledgeResult, TranscriptSegment } from "../types";
+import type { InterviewQuestion, KnowledgeResult, TranscriptSegment } from "../types";
 import { RealtimeMode, SessionPhase } from "../types";
 import {
   startSystemAudioCapture,
@@ -11,6 +11,8 @@ type RealtimeEvent = {
   itemId?: string;
   text?: string;
   message?: string;
+  questionId?: string;
+  questions?: Array<Pick<InterviewQuestion, "id" | "text" | "isFinal">>;
   results?: KnowledgeResult[];
 };
 
@@ -19,7 +21,7 @@ const emptySegment: Omit<TranscriptSegment, "itemId" | "mode" | "createdAt"> = {
   translatedText: "",
   isSourceFinal: false,
   isTranslationFinal: false,
-  knowledgeResults: [],
+  questions: [],
 };
 
 /** Updates a transcript turn while preserving arrival order from the realtime stream. */
@@ -38,6 +40,40 @@ function updateSegment(
   }
   return segments.map((segment, index) =>
     index === existingIndex ? { ...segment, ...patch } : segment,
+  );
+}
+
+/** Reconciles split questions while retaining knowledge only for unchanged question text. */
+function reconcileQuestions(
+  currentQuestions: InterviewQuestion[],
+  questions: NonNullable<RealtimeEvent["questions"]>,
+) {
+  return questions.map((question) => {
+    const current = currentQuestions.find((value) => value.id === question.id);
+    return {
+      ...question,
+      knowledgeResults: current?.text === question.text ? current.knowledgeResults : [],
+      knowledgeError: current?.text === question.text ? current.knowledgeError : undefined,
+    };
+  });
+}
+
+/** Updates one question without changing sibling questions in the same spoken turn. */
+function updateQuestion(
+  segments: TranscriptSegment[],
+  itemId: string,
+  questionId: string,
+  patch: Partial<InterviewQuestion>,
+) {
+  return segments.map((segment) =>
+    segment.itemId === itemId
+      ? {
+          ...segment,
+          questions: segment.questions.map((question) =>
+            question.id === questionId ? { ...question, ...patch } : question,
+          ),
+        }
+      : segment,
   );
 }
 
@@ -120,19 +156,41 @@ export function useInterviewSession() {
           }),
         );
         break;
-      case "knowledge.results":
+      case "questions.updated":
         setSegments((values) =>
           updateSegment(values, itemId, mode, {
+            questions: reconcileQuestions(
+              values.find((segment) => segment.itemId === itemId)?.questions ?? [],
+              event.questions ?? [],
+            ),
+          }),
+        );
+        break;
+      case "question.knowledge.results": {
+        const questionId = event.questionId;
+        if (!questionId) {
+          break;
+        }
+        setSegments((values) =>
+          updateQuestion(values, itemId, questionId, {
             knowledgeResults: event.results ?? [],
             knowledgeError: undefined,
           }),
         );
         break;
-      case "knowledge.error":
+      }
+      case "question.knowledge.error": {
+        const questionId = event.questionId;
+        if (!questionId) {
+          break;
+        }
         setSegments((values) =>
-          updateSegment(values, itemId, mode, { knowledgeError: event.message }),
+          updateQuestion(values, itemId, questionId, {
+            knowledgeError: event.message,
+          }),
         );
         break;
+      }
       case "session.finished":
         socketRef.current?.close();
         setPhase(SessionPhase.Idle);

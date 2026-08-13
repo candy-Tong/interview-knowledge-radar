@@ -6,6 +6,7 @@
 
 - Chrome 负责系统音频共享和界面展示。
 - Node.js 在 `127.0.0.1:8787` 提供静态页面、REST API 和 WebSocket 代理。
+- llama.cpp 在 `127.0.0.1:18080` 运行 Qwen3.5-2B，把一轮识别拆成独立问题。
 - Docker 中的 PostgreSQL + pgvector 在 `localhost:54329` 保存完整知识、BM25 词项和向量。
 - Node.js 使用服务端 `.env` 中的凭据访问阿里云实时翻译、实时 ASR 和 embedding 接口。
 
@@ -34,12 +35,13 @@
 - 检查 Node.js、npm、Docker、端口和项目文件。
 - 在 `.env` 不存在时复制 `.env.example`，随后暂停等待用户填写密钥。
 - 运行 `npm ci`、Docker Compose、数据库初始化、知识导入、测试和构建命令。
+- 在已安装 llama.cpp 时启动本地拆题模型；首次会下载约 1.3 GB 的 Q4_K_M 权重。
 - 启动本地 Node.js 服务并调用 localhost API 验收。
 - 打开本地页面并检查布局；系统音频授权仍必须由用户亲自确认。
 
 ### 必须暂停并询问用户的情况
 
-- 需要安装或升级 Node.js、Docker Desktop 或 Chrome。
+- 需要安装或升级 Node.js、Docker Desktop、Chrome 或 llama.cpp。
 - `.env` 已存在但配置未通过；禁止覆盖或输出文件内容。
 - `54329` 或 `8787` 被无法确认归属的进程占用。
 - 需要删除数据库 volume、清空表、恢复备份或执行其他破坏性操作。
@@ -55,6 +57,7 @@
 | Docker | Docker Desktop 或 Docker Engine | 运行 PostgreSQL + pgvector |
 | Docker Compose | v2，使用 `docker compose` | 管理数据库容器和数据卷 |
 | Chrome | 最新稳定版 | 系统音频共享与页面运行 |
+| llama.cpp | 当前稳定版 `llama-server` | 本地 Qwen3.5-2B 问题拆分 |
 | 阿里云百炼 | API Key、Workspace ID | 实时翻译、实时 ASR 和 1024 维 embedding |
 
 阿里云 Workspace 与 `DASHSCOPE_REGION` 必须属于同一地域。当前配置只接受：
@@ -66,6 +69,7 @@
 
 - `54329`：PostgreSQL
 - `8787`：生产页面、API 和 WebSocket
+- `18080`：llama.cpp OpenAI-compatible API，只允许 loopback
 - `5173`：仅开发模式使用
 
 ## 部署流程
@@ -94,6 +98,7 @@ node -e 'const [major, minor] = process.versions.node.split(".").map(Number); if
 ```bash
 lsof -nP -iTCP:54329 -sTCP:LISTEN || true
 lsof -nP -iTCP:8787 -sTCP:LISTEN || true
+lsof -nP -iTCP:18080 -sTCP:LISTEN || true
 ```
 
 如果端口已被本项目现有 PostgreSQL 或 Interview Knowledge Radar 占用，可以复用或先正常停止；无法确认进程归属时暂停，不要直接 `kill`。
@@ -119,6 +124,9 @@ DASHSCOPE_ASR_MODEL=qwen3-asr-flash-realtime
 HOST=127.0.0.1
 PORT=8787
 RUNTIME_LOG_DIR=runtime-logs
+LOCAL_QUESTION_MODEL_URL=http://127.0.0.1:18080/v1
+LOCAL_QUESTION_MODEL=qwen3.5-2b
+LOCAL_QUESTION_MODEL_TIMEOUT_MS=6000
 ```
 
 不要把真实值粘贴到聊天、日志、README 或部署报告。Agent 可以运行下面的检查；该命令只输出缺失的变量名，不输出变量值：
@@ -139,7 +147,41 @@ npm ci
 
 不要手工修改 `node_modules/`。`npm ci` 失败时保留完整错误信息，但不要在报告中包含任何环境变量值。
 
-### 4. 启动 PostgreSQL
+### 4. 启动本地拆题模型
+
+先确认 `llama-server` 存在：
+
+```bash
+command -v llama-server
+```
+
+macOS 且已经使用 Homebrew 时，可由用户授权后安装：
+
+```bash
+brew install llama.cpp
+```
+
+在独立长驻终端启动：
+
+```bash
+npm run model:start
+```
+
+首次启动会从 Hugging Face 下载 `unsloth/Qwen3.5-2B-GGUF` 的 Q4_K_M 文本模型；脚本使用 `--no-mmproj`，不下载不需要的视觉投影。等待输出：
+
+```text
+listening on http://127.0.0.1:18080
+```
+
+然后验证：
+
+```bash
+curl --fail http://127.0.0.1:18080/v1/models
+```
+
+模型暂时不可用时，应用会回退为“整个 turn 当作一题”，但正式部署验收仍要求该健康检查通过。
+
+### 5. 启动 PostgreSQL
 
 ```bash
 docker compose up -d postgres
@@ -155,7 +197,7 @@ docker compose logs --tail=100 postgres
 
 不要运行 `docker compose down -v`，该命令会删除知识库数据卷。
 
-### 5. 初始化 schema 并导入知识
+### 6. 初始化 schema 并导入知识
 
 ```bash
 npm run db:init
@@ -171,7 +213,7 @@ npm run db:ingest
 
 删除或重命名知识文件会在下次更新时同步删除数据库中的旧 sourceName。
 
-### 6. 运行测试并构建生产页面
+### 7. 运行测试并构建生产页面
 
 ```bash
 npm test
@@ -180,7 +222,7 @@ npm run build
 
 两个命令都必须以退出码 0 完成。构建产物位于 `dist/`，不要手工编辑。
 
-### 7. 启动生产服务
+### 8. 启动生产服务
 
 ```bash
 npm start
@@ -209,7 +251,7 @@ const sourceNames = (await readdir("knowledge-base", { recursive: true }))
 
 const healthResponse = await fetch(`${baseUrl}/api/health`);
 const health = await healthResponse.json();
-if (!healthResponse.ok || !health.databaseReady || !health.dashScopeReady) {
+if (!healthResponse.ok || !health.databaseReady || !health.dashScopeReady || !health.questionSplitterReady) {
   throw new Error(`Health check failed: ${JSON.stringify(health)}`);
 }
 
@@ -269,10 +311,10 @@ NODE
 4. 确认页面本身没有横向或纵向滚动，长知识只在各自卡片内滚动。
 5. 在左侧“面试官正在问什么”卡片第二行点击“监听”。
 6. 用户在 Chrome 弹窗中选择屏幕、窗口或标签页，并开启“同时分享系统音频”。
-7. 选择“翻译模式”并播放一段英文问题，确认中文翻译完成前已经出现最多两条完整知识，随后结果会随完整原文校准。
+7. 选择“翻译模式”并播放一段包含两个独立问题的英文，确认中文翻译完成前左侧已出现 Q1/Q2，两题分别有最多两条完整知识。
 8. 结束会话后切换“普通模式”，确认只出现原始 ASR 转写，不显示中文同传，并仍返回最多两条知识。
-9. 确认静音超过 5 秒才生成下一行，相关知识自动滚动到高亮句。
-10. 结束一次会话后检查 `runtime-logs/$(date -u +%F).jsonl`，确认包含 `recognition.turn.final` 和 `knowledge.retrieval.completed`，且没有 API Key 或连接凭据。
+9. 点击 Q1/Q2 确认中右两栏切换到各自绑定知识；静音超过 5 秒才生成下一行，相关知识自动滚动到高亮句。
+10. 结束一次会话后检查 `runtime-logs/$(date -u +%F).jsonl`，确认包含 `recognition.turn.final`、`question.split.completed` 和每个 `questionId` 的 `knowledge.retrieval.completed`，且没有 API Key 或连接凭据。
 
 第 5～6 步需要真实用户手势和系统权限，Agent 不得绕过授权。页面不会请求麦克风。
 
@@ -290,7 +332,7 @@ npm run dev
 
 ## 更新部署
 
-1. 使用 `Ctrl+C` 正常停止现有 Node.js 服务，不停止 PostgreSQL。
+1. 使用 `Ctrl+C` 正常停止现有 Node.js 服务和本地拆题模型，不停止 PostgreSQL。
 2. 确认代码来源和工作区状态，避免覆盖未提交修改。
 3. 依次执行：
 
@@ -301,6 +343,7 @@ npm run db:init
 npm run db:ingest
 npm test
 npm run build
+# 另一终端运行 npm run model:start
 npm start
 ```
 
@@ -311,6 +354,7 @@ npm start
 ## 停止服务
 
 - Node.js：在运行 `npm start` 的终端按 `Ctrl+C`。
+- 本地拆题模型：在运行 `npm run model:start` 的终端按 `Ctrl+C`。
 - 暂停数据库但保留数据：
 
 ```bash
@@ -336,6 +380,7 @@ docker compose down
 | `vectors < chunks` | 最近一次导入日志 | 配置阿里云后重新运行 `npm run db:ingest` |
 | 源文件数与 documents 不一致 | 最近一次增量更新结果 | 在页面点击“更新知识”或运行 `npm run db:ingest` |
 | `8787` 被占用 | `lsof -nP -iTCP:8787 -sTCP:LISTEN` | 复用已确认的实例或正常停止；不杀未知进程 |
+| 顶部本地拆题状态未就绪 | `curl http://127.0.0.1:18080/v1/models` | 运行 `npm run model:start`；首次等待权重下载与模型加载 |
 | WebSocket 返回 403 | 页面 URL 和 Origin | 只从 `localhost:5173` 或 `127.0.0.1:8787` 使用 |
 | 没有系统音轨 | Chrome 共享弹窗和 macOS 权限 | 勾选分享音频，允许“屏幕与系统音频录制” |
 | 实时语音连接中断 | 阿里云地域、Workspace、网络 | 修正配置后重新开始会话 |

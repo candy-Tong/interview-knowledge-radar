@@ -37,6 +37,14 @@ export type KnowledgeResult = {
   focusEnd: number;
 };
 
+export type InterviewQuestion = {
+  id: string;
+  text: string;
+  isFinal: boolean;
+  knowledgeResults: KnowledgeResult[];
+  knowledgeError?: string;
+};
+
 export type TranscriptSegment = {
   itemId: string;
   mode: RealtimeMode;
@@ -44,14 +52,15 @@ export type TranscriptSegment = {
   translatedText: string;
   isSourceFinal: boolean;
   isTranslationFinal: boolean;
-  knowledgeResults: KnowledgeResult[];
-  knowledgeError?: string;
+  questions: InterviewQuestion[];
   createdAt: number;
 };
 
 export type ServiceHealth = {
   databaseReady: boolean;
   dashScopeReady: boolean;
+  questionSplitterReady: boolean;
+  questionSplitterModel: string;
   asrModel: string;
   translationModel: string;
   embeddingModel: string;

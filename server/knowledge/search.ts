@@ -18,6 +18,14 @@ type StoredKnowledgeResult = Omit<KnowledgeResult, "focusStart" | "focusEnd">;
 
 export const maximumKnowledgeResults = 2;
 
+/** Adds the relevant-passage offsets shared by lexical and hybrid retrieval. */
+function addRelevantPassages(rows: StoredKnowledgeResult[], query: string) {
+  return rows.map((row) => ({
+    ...row,
+    ...locateRelevantPassage(row.content, query),
+  }));
+}
+
 const hybridSearchSql = `
 WITH corpus_stats AS (
   SELECT
@@ -139,6 +147,23 @@ ORDER BY "hybridScore" DESC
 LIMIT $2;
 `;
 
+/** Runs local-only BM25 retrieval for rapidly changing speech drafts. */
+export async function searchKnowledgeBm25(
+  query: string,
+  limit = maximumKnowledgeResults,
+) {
+  const terms = tokenizeEnglish(query);
+  if (terms.length === 0) {
+    return [];
+  }
+  const resultLimit = Math.min(Math.max(limit, 1), maximumKnowledgeResults);
+  const result = await databasePool.query<StoredKnowledgeResult>(bm25OnlySearchSql, [
+    terms,
+    resultLimit,
+  ]);
+  return addRelevantPassages(result.rows, query);
+}
+
 /** Searches the local knowledge base with BM25 plus pgvector, falling back to BM25 when unconfigured. */
 export async function searchKnowledge(query: string, limit = maximumKnowledgeResults) {
   const terms = tokenizeEnglish(query);
@@ -151,14 +176,7 @@ export async function searchKnowledge(query: string, limit = maximumKnowledgeRes
     process.env.DASHSCOPE_API_KEY && process.env.DASHSCOPE_WORKSPACE_ID,
   );
   if (!hasEmbeddingConfig) {
-    const result = await databasePool.query<StoredKnowledgeResult>(bm25OnlySearchSql, [
-      terms,
-      resultLimit,
-    ]);
-    return result.rows.map((row) => ({
-      ...row,
-      ...locateRelevantPassage(row.content, query),
-    }));
+    return searchKnowledgeBm25(query, resultLimit);
   }
 
   const [embedding] = await createEmbeddings([query]);
@@ -168,8 +186,5 @@ export async function searchKnowledge(query: string, limit = maximumKnowledgeRes
     vectorLiteral,
     resultLimit,
   ]);
-  return result.rows.map((row) => ({
-    ...row,
-    ...locateRelevantPassage(row.content, query),
-  }));
+  return addRelevantPassages(result.rows, query);
 }

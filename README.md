@@ -1,13 +1,14 @@
 # Interview Knowledge Radar
 
-Interview Knowledge Radar 是本地优先的实时面试辅助工具。Chrome 只采集用户主动共享的系统音频；翻译模式通过阿里云实时翻译输出英文原文与中文同传，普通模式通过独立实时 ASR 只输出原始转写。两种模式都会用 PostgreSQL 中的 BM25 和 pgvector 从本地知识库召回完整答案。
+Interview Knowledge Radar 是本地优先的实时面试辅助工具。Chrome 只采集用户主动共享的系统音频；翻译模式通过阿里云实时翻译输出英文原文与中文同传，普通模式通过独立实时 ASR 只输出原始转写。本地 Qwen3.5-2B 会把一轮语音拆成独立问题，每题再用 PostgreSQL 中的 BM25 和 pgvector 召回最多两条完整知识。
 
 ## 核心能力
 
 - **翻译/普通双模式**：翻译模式调用 LiveTranslate，普通模式只调用 Qwen3-ASR-Realtime，不产生翻译请求。
 - **系统音频采集**：只使用 Chrome 屏幕/窗口/标签页共享，不请求麦克风。
 - **5 秒问题合并**：连续 ASR 片段合并为一条面试官问题，静音超过 5 秒才开始下一条。
-- **说话中提前检索**：增量原文一旦形成可识别意图就开始查询，并按节流规则刷新同一行，不等待中文翻译完成。
+- **本地复合问题拆分**：llama.cpp 运行 Qwen3.5-2B Q4_K_M，一轮中的多个问题分别绑定自己的知识结果。
+- **说话中提前检索**：增量原文经本地拆题后立即做 BM25，不等待中文翻译完成；5 秒定稿后再做混合检索。
 - **混合检索**：BM25 词法召回和 1024 维向量召回通过 RRF 排序，每次最多返回 2 条知识。
 - **完整知识展示**：一份知识源 Markdown 对应一条知识，正文不切分。
 - **相关句定位**：长知识自动滚动到与识别问题最相关的句子，并保留全文滚动能力。
@@ -24,9 +25,11 @@ flowchart LR
   B -->|普通模式| J[Qwen3-ASR 原始语音识别]
   C --> K[增量识别原文]
   J --> K
-  K -->|说话中节流刷新| E[BM25 词法召回]
-  K -->|说话中节流刷新| F[阿里云生成查询向量]
-  K --> D[5 秒窗口合并为一个问题行]
+  K --> L[本地 Qwen3.5-2B 拆分 Q1/Q2]
+  L -->|说话中| E[BM25 词法召回]
+  K --> D[5 秒窗口合并为一个 turn]
+  D --> L
+  L -->|最终问题| F[阿里云生成查询向量]
   F --> G[pgvector 语义召回]
   E --> H[RRF 混合排序]
   G --> H
@@ -48,7 +51,7 @@ flowchart LR
 
 ## 快速开始
 
-要求 Node.js `22.12.0+`、Docker Compose v2、最新版 Chrome，以及阿里云百炼 API Key 和 Workspace ID。
+要求 Node.js `22.12.0+`、Docker Compose v2、最新版 Chrome、[llama.cpp](https://github.com/ggml-org/llama.cpp)，以及阿里云百炼 API Key 和 Workspace ID。macOS 可用 `brew install llama.cpp` 安装。
 
 ```bash
 npm ci
@@ -60,6 +63,15 @@ npm run db:init
 npm run db:ingest
 npm test
 npm run build
+```
+
+在两个终端分别启动本地拆题模型和应用：
+
+```bash
+# 终端 A：首次约下载 1.3 GB 的 Q4_K_M 模型
+npm run model:start
+
+# 终端 B
 npm start
 ```
 
@@ -75,14 +87,14 @@ npm run dev
 
 ## 使用方式
 
-1. 打开页面，等待右上角数据库、阿里云和本地 RAG 状态就绪。
+1. 打开页面，等待右上角数据库、阿里云、本地 RAG 和拆题模型状态就绪。
 2. 在“面试官正在问什么”标题右侧选择“翻译”或“普通”；监听期间模式会锁定。
 3. 点击“监听”。
 4. 在 Chrome 弹窗中选择正在播放面试声音的屏幕、窗口或标签页，并开启“同时分享系统音频”。
 5. 翻译模式显示英文原文和中文同传；普通模式只显示 ASR 原始转写，不调用翻译模型。
-6. 面试官仍在说话时，中栏和右栏就会根据当前原文刷新最多两条完整知识，并自动滚动到相关句；无需等待翻译完成。
+6. 面试官仍在说话时，左侧会出现 Q1/Q2；每题独立召回最多两条完整知识，无需等待翻译完成。
 7. 中文翻译和原文都可以用鼠标选择，再使用系统快捷键复制；无需额外点击复制按钮。
-8. 点击左侧历史问题可切换对应知识；点击“知识库总览”可查看所有完整知识。
+8. 点击左侧历史 turn 或其 Qn 可切换对应知识；点击“知识库总览”可查看所有完整知识。
 9. 在知识库搜索框输入英文面试问题，按回车或点击“搜索”，即可模拟实时问答使用的混合检索。
 
 页面不会调用 `getUserMedia`。没有获取到系统音轨时会直接报错，不会回退到耳机或电脑麦克风。
@@ -118,6 +130,9 @@ npm run db:ingest:bm25
 | `DASHSCOPE_TRANSLATION_MODEL` | `qwen3.5-livetranslate-flash-realtime` | 实时同传模型 |
 | `DASHSCOPE_ASR_MODEL` | `qwen3-asr-flash-realtime` | 普通模式实时语音识别模型 |
 | `DASHSCOPE_EMBEDDING_MODEL` | `text-embedding-v4` | 1024 维向量模型 |
+| `LOCAL_QUESTION_MODEL_URL` | `http://127.0.0.1:18080/v1` | llama.cpp OpenAI-compatible 地址 |
+| `LOCAL_QUESTION_MODEL` | `qwen3.5-2b` | 本地模型 alias |
+| `LOCAL_QUESTION_MODEL_TIMEOUT_MS` | `6000` | 拆题超时，超时回退整段检索 |
 | `HOST` | `127.0.0.1` | Node.js 监听地址 |
 | `PORT` | `8787` | 页面、API 和 WebSocket 端口 |
 | `RUNTIME_LOG_DIR` | `runtime-logs` | 本地识别与召回复盘日志目录 |
@@ -131,7 +146,8 @@ npm run db:ingest:bm25
 - `recognition.partial` / `recognition.segment.completed`：增量识别和 ASR 完整片段。
 - `translation.partial` / `translation.segment.completed`：增量及完整翻译片段。
 - `recognition.turn.final`：5 秒规则合并后的最终原文和翻译。
-- `knowledge.retrieval.*`：查询版本、耗时、是否被新查询取代，以及命中知识的来源、标题、排名、BM25/vector/hybrid 分数和相关文本。
+- `question.split.*`：拆题输入、版本、耗时、问题列表和是否回退整段。
+- `knowledge.retrieval.*`：`questionId`、BM25/hybrid 阶段、耗时以及命中知识的排名与分数。
 - `session.*` / `speech.*`：会话生命周期、语音起止和错误。
 
 可以用下面的命令查看最近记录：
@@ -147,6 +163,7 @@ tail -n 50 runtime-logs/$(date -u +%F).jsonl
 | 命令 | 用途 |
 | --- | --- |
 | `npm run dev` | 同时启动 Vite 和 Node.js watch 服务 |
+| `npm run model:start` | 启动 loopback 的 Qwen3.5-2B 拆题服务 |
 | `npm test` | 运行 Vitest 测试 |
 | `npm run build` | TypeScript 检查并构建生产页面 |
 | `npm start` | 在 `8787` 启动生产服务 |
@@ -158,7 +175,7 @@ tail -n 50 runtime-logs/$(date -u +%F).jsonl
 
 | 接口 | 用途 |
 | --- | --- |
-| `GET /api/health` | 数据库和阿里云配置就绪状态 |
+| `GET /api/health` | 数据库、阿里云和本地拆题模型就绪状态 |
 | `GET /api/knowledge/stats` | documents/chunks/vectors 数量 |
 | `GET /api/knowledge` | 返回知识总览的全部完整知识 |
 | `POST /api/knowledge/refresh` | 递归扫描目录并增量更新索引 |
@@ -169,7 +186,8 @@ tail -n 50 runtime-logs/$(date -u +%F).jsonl
 
 - 系统音频只有在用户通过 Chrome 授权后才会采集；翻译模式发送给 LiveTranslate，普通模式发送给独立 Qwen3-ASR-Realtime。
 - Markdown 原文、BM25 词项、向量和检索结果保存在本机 PostgreSQL。
-- 完整知识在导入时发送给阿里云生成向量；说话过程中的节流原文和 ASR 完整原文会在检索时发送给阿里云生成查询向量。
+- 拆题仅发送到本机 `127.0.0.1` 的 llama.cpp；说话中的草稿只做本地 BM25，最终问题才会发送给阿里云生成查询向量。
+- 完整知识在导入时发送给阿里云生成向量。
 - 识别原文、翻译和知识召回元数据会写入本机 `runtime-logs/`，用于后续复盘优化，不会自动上传。
 - API Key 不进入前端包，由本地 Node.js 服务代理云端请求。
 - 服务默认只监听回环地址，并拒绝非本地页面发起的 WebSocket 连接。

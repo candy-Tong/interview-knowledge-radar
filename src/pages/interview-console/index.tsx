@@ -1,4 +1,11 @@
-import { BookOpenText, Database, Headphones, MessagesSquare, ShieldCheck } from "lucide-react";
+import {
+  BookOpenText,
+  BrainCircuit,
+  Database,
+  Headphones,
+  MessagesSquare,
+  ShieldCheck,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import { ControlDock } from "./components/ControlDock";
 import { KnowledgeOverview } from "./components/KnowledgeOverview";
@@ -50,6 +57,7 @@ export function InterviewConsolePage() {
   const [health, setHealth] = useState<ServiceHealth | null>(null);
   const [stats, setStats] = useState<KnowledgeStats>({ documents: 0, chunks: 0, vectors: 0 });
   const [selectedSegmentId, setSelectedSegmentId] = useState<string>();
+  const [selectedQuestionId, setSelectedQuestionId] = useState<string>();
   const [activeView, setActiveView] = useState(ConsoleView.Interview);
   const hasCompleteVectorIndex = stats.chunks > 0 && stats.vectors === stats.chunks;
   const canStart = Boolean(
@@ -65,14 +73,32 @@ export function InterviewConsolePage() {
       .catch(() => setHealth(null));
   }, []);
 
-  const latestSegmentId = session.segments.at(-1)?.itemId;
+  const latestSegment = session.segments.at(-1);
+  const latestSegmentId = latestSegment?.itemId;
+  const latestQuestionId = latestSegment?.questions.at(-1)?.id;
   useEffect(() => {
     setSelectedSegmentId(latestSegmentId);
+    setSelectedQuestionId(latestQuestionId);
   }, [latestSegmentId]);
+
+  useEffect(() => {
+    if (selectedSegmentId === latestSegmentId) {
+      setSelectedQuestionId(latestQuestionId);
+    }
+  }, [latestQuestionId, latestSegmentId, selectedSegmentId]);
 
   const selectedSegment =
     session.segments.find((segment) => segment.itemId === selectedSegmentId) ??
     session.segments.at(-1);
+  const selectedQuestion =
+    selectedSegment?.questions.find((question) => question.id === selectedQuestionId) ??
+    selectedSegment?.questions.at(-1);
+
+  function handleTranscriptSelect(itemId: string, questionId?: string) {
+    const segment = session.segments.find((value) => value.itemId === itemId);
+    setSelectedSegmentId(itemId);
+    setSelectedQuestionId(questionId ?? segment?.questions.at(-1)?.id);
+  }
 
   return (
     <main className="interview-console">
@@ -122,6 +148,15 @@ export function InterviewConsolePage() {
               <ShieldCheck size={13} />
               <i />
             </div>
+            <div
+              className={health?.questionSplitterReady ? "is-ready" : ""}
+              title={health?.questionSplitterReady
+                ? `本地拆题：${health.questionSplitterModel}`
+                : "本地拆题未启动，将回退为整段单问题"}
+            >
+              <BrainCircuit size={13} />
+              <i />
+            </div>
           </div>
         </div>
       </header>
@@ -144,11 +179,12 @@ export function InterviewConsolePage() {
               />
             }
             mode={session.mode}
-            onSelect={setSelectedSegmentId}
+            onSelect={handleTranscriptSelect}
             segments={session.segments}
+            selectedQuestionId={selectedQuestion?.id}
             selectedSegmentId={selectedSegment?.itemId}
           />
-          <KnowledgeRadar segment={selectedSegment} />
+          <KnowledgeRadar question={selectedQuestion} />
         </div>
       ) : (
         <KnowledgeOverview expectedCount={stats.documents} onStatsChange={setStats} />

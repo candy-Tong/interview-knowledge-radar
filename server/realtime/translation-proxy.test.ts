@@ -8,15 +8,19 @@ import {
   createRealtimeWebSocketServer,
   handleRealtimeUpgrade,
   isAllowedBrowserOrigin,
+  stabilizeQuestionTexts,
 } from "./translation-proxy.js";
 
 type JsonEvent = {
   type?: string;
   audio?: string;
   itemId?: string;
+  questionId?: string;
   text?: string;
   query?: string;
+  isFinal?: boolean;
   mode?: string;
+  questions?: Array<{ id: string; text: string; isFinal: boolean }>;
   results?: Array<{ sourceName?: string }>;
   session?: Record<string, unknown>;
 };
@@ -64,6 +68,36 @@ describe("isAllowedBrowserOrigin", () => {
     expect(isAllowedBrowserOrigin("http://127.0.0.1:8787")).toBe(true);
     expect(isAllowedBrowserOrigin("https://attacker.example")).toBe(false);
     expect(isAllowedBrowserOrigin("not a url")).toBe(false);
+  });
+});
+
+describe("stabilizeQuestionTexts", () => {
+  it("keeps completed draft questions while the trailing question changes", () => {
+    expect(stabilizeQuestionTexts(
+      {
+        questions: ["Introduce yourself.", "Explain your agent."],
+        usedFallback: false,
+      },
+      {
+        questions: ["Please introduce yourself.", "Explain your complaint agent."],
+        usedFallback: false,
+      },
+      false,
+    )).toEqual(["Introduce yourself.", "Explain your complaint agent."]);
+  });
+
+  it("accepts the complete final split", () => {
+    expect(stabilizeQuestionTexts(
+      {
+        questions: ["Introduce yourself.", "Explain your agent."],
+        usedFallback: false,
+      },
+      {
+        questions: ["Please introduce yourself.", "Explain your complaint agent."],
+        usedFallback: false,
+      },
+      true,
+    )).toEqual(["Please introduce yourself.", "Explain your complaint agent."]);
   });
 });
 
@@ -280,7 +314,7 @@ describe("translation proxy", () => {
     });
     expect(requestedKnowledgeLimit).toBe(2);
     expect(requestedKnowledgeQuery).toBe("Tell me about your monorepo and the main result");
-    expect(knowledgeSearchCalls).toBe(2);
+    expect(knowledgeSearchCalls).toBe(3);
     expect(Buffer.from(receivedAudio, "base64")).toEqual(Buffer.from([1, 2, 3, 4]));
     expect(receivedSession).toMatchObject({
       modalities: ["text"],
@@ -325,6 +359,10 @@ describe("translation proxy", () => {
           ],
         }),
         expect.objectContaining({ event: "session.finished" }),
+        expect.objectContaining({
+          event: "question.split.completed",
+          turnId: "turn_source-1",
+        }),
       ]),
     );
   });
@@ -425,13 +463,14 @@ describe("translation proxy", () => {
     ).toBe(false);
   });
 
-  it("uses the standalone ASR session in transcription mode without translation", async () => {
+  it("uses standalone ASR and retrieves two knowledge sets for a compound turn", async () => {
     const upstreamHttpServer = createServer();
     const upstreamServer = new WebSocketServer({ server: upstreamHttpServer });
     const upstreamPort = await listen(upstreamHttpServer);
     let receivedSession: Record<string, unknown> | undefined;
     let receivedBetaHeader = "";
-    let knowledgeSearchCalls = 0;
+    const draftQueries: string[] = [];
+    const finalQueries: string[] = [];
 
     upstreamServer.on("connection", (socket, request) => {
       openSockets.push(socket);
@@ -450,15 +489,15 @@ describe("translation proxy", () => {
             JSON.stringify({
               type: "conversation.item.input_audio_transcription.text",
               item_id: "asr-1",
-              text: "请介绍你的",
-              stash: "项目",
+              text: "Please introduce yourself and explain",
+              stash: " your complaint agent",
             }),
           );
           socket.send(
             JSON.stringify({
               type: "conversation.item.input_audio_transcription.completed",
               item_id: "asr-1",
-              transcript: "请介绍你的项目",
+              transcript: "Please introduce yourself and explain your complaint agent",
             }),
           );
           socket.send(JSON.stringify({ type: "input_audio_buffer.speech_stopped" }));
@@ -475,10 +514,21 @@ describe("translation proxy", () => {
       upstreamUrl: `ws://127.0.0.1:${upstreamPort}`,
       apiKey: "test-key",
       turnGapMs: 20,
-      search: async () => {
-        knowledgeSearchCalls += 1;
+      draftSearch: async (query) => {
+        draftQueries.push(query);
         return [];
       },
+      search: async (query) => {
+        finalQueries.push(query);
+        return [];
+      },
+      splitQuestions: async () => ({
+        questions: [
+          "Please introduce yourself.",
+          "Explain your complaint agent.",
+        ],
+        usedFallback: false,
+      }),
     });
     proxyHttpServer.on("upgrade", (request, socket, head) => {
       handleRealtimeUpgrade(proxyServer, request, socket, head);
@@ -497,9 +547,25 @@ describe("translation proxy", () => {
     });
     const ready = waitForEvent(browserSocket, (event) => event.type === "session.ready");
     const source = waitForEvent(browserSocket, (event) => event.type === "source.final");
-    const knowledge = waitForEvent(
+    const questions = waitForEvent(
       browserSocket,
-      (event) => event.type === "knowledge.results",
+      (event) =>
+        event.type === "questions.updated" &&
+        event.questions?.every((question) => question.isFinal) === true,
+    );
+    const firstKnowledge = waitForEvent(
+      browserSocket,
+      (event) =>
+        event.type === "question.knowledge.results" &&
+        event.questionId === "turn_asr-1_q1" &&
+        event.isFinal === true,
+    );
+    const secondKnowledge = waitForEvent(
+      browserSocket,
+      (event) =>
+        event.type === "question.knowledge.results" &&
+        event.questionId === "turn_asr-1_q2" &&
+        event.isFinal === true,
     );
     browserSocket.send(Buffer.from([5, 6, 7, 8]));
 
@@ -509,10 +575,28 @@ describe("translation proxy", () => {
     });
     await expect(source).resolves.toMatchObject({
       type: "source.final",
-      text: "请介绍你的项目",
+      text: "Please introduce yourself and explain your complaint agent",
     });
-    await expect(knowledge).resolves.toMatchObject({ type: "knowledge.results" });
-    expect(knowledgeSearchCalls).toBe(1);
+    await expect(questions).resolves.toMatchObject({
+      questions: [
+        { id: "turn_asr-1_q1", text: "Please introduce yourself." },
+        { id: "turn_asr-1_q2", text: "Explain your complaint agent." },
+      ],
+    });
+    await expect(firstKnowledge).resolves.toMatchObject({
+      query: "Please introduce yourself.",
+    });
+    await expect(secondKnowledge).resolves.toMatchObject({
+      query: "Explain your complaint agent.",
+    });
+    expect(draftQueries).toEqual([
+      "Please introduce yourself.",
+      "Explain your complaint agent.",
+    ]);
+    expect(finalQueries).toEqual([
+      "Please introduce yourself.",
+      "Explain your complaint agent.",
+    ]);
     expect(receivedBetaHeader).toBe("realtime=v1");
     expect(receivedSession).toMatchObject({
       modalities: ["text"],

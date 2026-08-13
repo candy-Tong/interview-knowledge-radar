@@ -1,10 +1,10 @@
 import { useEffect, useRef } from "react";
 import { BookMarked, LocateFixed, Sparkles } from "lucide-react";
-import type { KnowledgeResult, TranscriptSegment } from "../../types";
+import type { InterviewQuestion, KnowledgeResult } from "../../types";
 import "./style.css";
 
 type KnowledgeRadarProps = {
-  segment?: TranscriptSegment;
+  question?: InterviewQuestion;
 };
 
 const maximumVisibleResults = 2;
@@ -43,9 +43,9 @@ function renderKnowledgeContent(result: KnowledgeResult) {
 }
 
 /** Shows the selected question's two knowledge entries and moves each one to its best passage. */
-export function KnowledgeRadar({ segment }: KnowledgeRadarProps) {
+export function KnowledgeRadar({ question }: KnowledgeRadarProps) {
   const radarRef = useRef<HTMLElement>(null);
-  const results = (segment?.knowledgeResults ?? []).slice(0, maximumVisibleResults);
+  const results = (question?.knowledgeResults ?? []).slice(0, maximumVisibleResults);
   const resultIdentity = results
     .map((result) => `${result.id}:${result.focusStart}:${result.focusEnd}`)
     .join("|");
@@ -66,11 +66,11 @@ export function KnowledgeRadar({ segment }: KnowledgeRadarProps) {
     });
 
     return () => window.cancelAnimationFrame(animationFrame);
-  }, [resultIdentity, segment?.itemId]);
+  }, [question?.id, resultIdentity]);
 
   return (
     <section className="knowledge-radar" aria-label="知识库检索结果" ref={radarRef}>
-      {segment?.knowledgeError && <div className="knowledge-error">{segment.knowledgeError}</div>}
+      {question?.knowledgeError && <div className="knowledge-error">{question.knowledgeError}</div>}
 
       <div className="knowledge-columns">
         {[0, 1].map((index) => {
@@ -79,7 +79,7 @@ export function KnowledgeRadar({ segment }: KnowledgeRadarProps) {
             return (
               <div className="knowledge-empty" key={index}>
                 <Sparkles size={22} strokeWidth={1.2} />
-                <p>{segment?.sourceText ? "正在根据当前语音检索…" : "等待对应知识"}</p>
+                <p>{question?.text ? "正在检索这个问题…" : "等待对应问题"}</p>
               </div>
             );
           }

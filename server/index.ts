@@ -10,6 +10,7 @@ import {
   createRealtimeWebSocketServer,
   handleRealtimeUpgrade,
 } from "./realtime/translation-proxy.js";
+import { checkQuestionSplitterHealth } from "./realtime/question-splitter.js";
 
 const searchSchema = z.object({
   query: z.string().trim().min(2).max(2_000),
@@ -22,6 +23,7 @@ app.use(express.json({ limit: "32kb" }));
 
 app.get("/api/health", async (_request, response) => {
   let databaseReady = false;
+  const questionSplitterReadyPromise = checkQuestionSplitterHealth();
   try {
     await databasePool.query("SELECT 1");
     databaseReady = true;
@@ -32,6 +34,8 @@ app.get("/api/health", async (_request, response) => {
   response.json({
     databaseReady,
     dashScopeReady: Boolean(config.DASHSCOPE_API_KEY && config.DASHSCOPE_WORKSPACE_ID),
+    questionSplitterReady: await questionSplitterReadyPromise,
+    questionSplitterModel: config.LOCAL_QUESTION_MODEL,
     asrModel: config.DASHSCOPE_ASR_MODEL,
     translationModel: config.DASHSCOPE_TRANSLATION_MODEL,
     embeddingModel: config.DASHSCOPE_EMBEDDING_MODEL,

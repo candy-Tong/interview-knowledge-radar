@@ -9,7 +9,8 @@ type TranscriptDeckProps = {
   mode: RealtimeMode;
   controls: ReactNode;
   selectedSegmentId?: string;
-  onSelect: (itemId: string) => void;
+  selectedQuestionId?: string;
+  onSelect: (itemId: string, questionId?: string) => void;
 };
 
 /** Renders finalized and tentative interviewer turns as a readable live transcript. */
@@ -17,6 +18,7 @@ export function TranscriptDeck({
   controls,
   mode,
   segments,
+  selectedQuestionId,
   selectedSegmentId,
   onSelect,
 }: TranscriptDeckProps) {
@@ -55,20 +57,10 @@ export function TranscriptDeck({
         ) : (
           visibleSegments.map((segment) => (
             <div
-              aria-pressed={segment.itemId === selectedSegmentId}
               className={`transcript-turn${
                 segment.itemId === selectedSegmentId ? " is-current" : ""
               }${segment.mode === RealtimeMode.Transcription ? " is-transcription" : ""}`}
               key={segment.itemId}
-              onClick={() => onSelect(segment.itemId)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") {
-                  event.preventDefault();
-                  onSelect(segment.itemId);
-                }
-              }}
-              role="button"
-              tabIndex={0}
             >
               <div className="turn-index">
                 {String(segments.findIndex((value) => value.itemId === segment.itemId) + 1).padStart(
@@ -86,7 +78,20 @@ export function TranscriptDeck({
                   {segment.isSourceFinal && <Check size={13} />}
                 </div>
                 <p className="source-text">
-                  {segment.sourceText || <span className="text-placeholder">Listening…</span>}
+                  <span
+                    aria-pressed={segment.itemId === selectedSegmentId}
+                    onClick={() => onSelect(segment.itemId)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        onSelect(segment.itemId);
+                      }
+                    }}
+                    role="button"
+                    tabIndex={0}
+                  >
+                    {segment.sourceText || <span className="text-placeholder">Listening…</span>}
+                  </span>
                 </p>
                 {segment.mode === RealtimeMode.Translation && (
                   <div className="translation-line">
@@ -98,6 +103,26 @@ export function TranscriptDeck({
                     </p>
                   </div>
                 )}
+                <div className="turn-questions" aria-label="拆分后的面试问题">
+                  {segment.questions.length > 0 ? (
+                    segment.questions.map((question, index) => (
+                      <button
+                        aria-pressed={question.id === selectedQuestionId}
+                        className={question.id === selectedQuestionId ? "is-active" : ""}
+                        key={question.id}
+                        onClick={() => onSelect(segment.itemId, question.id)}
+                        title={question.text}
+                        type="button"
+                      >
+                        <span>Q{index + 1}</span>
+                        <strong>{question.text}</strong>
+                        <i className={question.isFinal ? "is-final" : ""} />
+                      </button>
+                    ))
+                  ) : segment.sourceText ? (
+                    <span className="questions-pending">正在拆分问题…</span>
+                  ) : null}
+                </div>
               </div>
             </div>
           ))
