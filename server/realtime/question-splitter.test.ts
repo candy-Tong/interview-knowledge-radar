@@ -94,13 +94,13 @@ describe("splitInterviewQuestions", () => {
       recentInterviewerTurns: [
         "Let's discuss the Finance Customer Complaint Agent project. What problem was it solving?",
       ],
-    })).resolves.toMatchObject({
+    })).resolves.toEqual({
       questions: [{
-        text: "what was your role specifically?",
-        retrievalQuery:
-          "what was your role specifically?\nFinance Customer Complaint Agent project",
+        text: "Good, and what was your role specifically?",
+        retrievalQuery: "Good, and what was your role specifically?",
       }],
-      usedFallback: false,
+      usedFallback: true,
+      fallbackReason: "local_model_ungrounded_questions",
     });
   });
 
@@ -127,6 +127,38 @@ describe("splitInterviewQuestions", () => {
         text: "Good, and what was your role specifically?",
         retrievalQuery: "Good, and what was your role specifically?",
       }],
+      usedFallback: true,
+      fallbackReason: "local_model_ungrounded_questions",
+    });
+  });
+
+  it("falls back to the complete turn when any split question is ungrounded", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      choices: [{
+        message: {
+          content: JSON.stringify({ questions: [
+            {
+              text: "Please introduce yourself.",
+              needsContext: false,
+              contextSpans: [],
+            },
+            {
+              text: "How did you reduce false-positive alerts?",
+              needsContext: false,
+              contextSpans: [],
+            },
+          ] }),
+        },
+      }],
+    }), { status: 200 })));
+
+    const transcript =
+      "Please introduce yourself. How did you reduce false positive alerts?";
+    await expect(splitInterviewQuestions({
+      transcript,
+      recentInterviewerTurns: [],
+    })).resolves.toEqual({
+      questions: [{ text: transcript, retrievalQuery: transcript }],
       usedFallback: true,
       fallbackReason: "local_model_ungrounded_questions",
     });

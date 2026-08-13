@@ -212,7 +212,7 @@ function groundQuestions(
   for (const modelQuestion of modelQuestions) {
     const text = findOriginalQuote(transcript, modelQuestion.text);
     if (!text) {
-      continue;
+      return null;
     }
     if (!modelQuestion.needsContext) {
       questions.push({ text, retrievalQuery: text });
