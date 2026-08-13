@@ -8,6 +8,7 @@ import { countTerms, prepareMarkdownDocument } from "./text.js";
 
 const defaultKnowledgeDirectory = resolve(process.cwd(), "knowledge-base");
 const knowledgeRefreshLock = [19_920_813, 20_260_813] as const;
+const knowledgeIndexSignature = "whole-document-tokenizer-v2";
 const knowledgeStatsSql = `
   SELECT
     (SELECT COUNT(*) FROM knowledge_documents)::text AS documents,
@@ -89,7 +90,11 @@ async function readKnowledgeDocuments(knowledgeDirectory: string) {
     documents.push({
       sourceName,
       markdown,
-      contentHash: createHash("sha256").update(markdown).digest("hex"),
+      contentHash: createHash("sha256")
+        .update(knowledgeIndexSignature)
+        .update("\0")
+        .update(markdown)
+        .digest("hex"),
       ...knowledge,
     });
   }

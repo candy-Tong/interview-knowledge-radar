@@ -16,6 +16,11 @@ describe("tokenizeEnglish", () => {
     expect(tokenizeEnglish("React TypeScript CI/CD and C++ quality gates"))
       .toEqual(["react", "typescript", "ci", "cd", "c++", "quality", "gate"]);
   });
+
+  it("removes trailing periods from tokens", () => {
+    expect(tokenizeEnglish("English. Time. Project. version-2.0."))
+      .toEqual(["english", "time", "project", "version-2.0"]);
+  });
 });
 
 describe("prepareMarkdownDocument", () => {

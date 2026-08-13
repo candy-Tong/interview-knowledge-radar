@@ -120,16 +120,17 @@ export function locateRelevantPassage(content: string, query: string): RelevantP
 
 /** Applies a deliberately small stemmer to improve interview-question recall. */
 function normalizeTerm(value: string) {
-  if (value.length > 5 && value.endsWith("ing")) {
-    return value.slice(0, -3);
+  const term = value.replace(/\.+$/, "");
+  if (term.length > 5 && term.endsWith("ing")) {
+    return term.slice(0, -3);
   }
-  if (value.length > 4 && value.endsWith("ed")) {
-    return value.slice(0, -2);
+  if (term.length > 4 && term.endsWith("ed")) {
+    return term.slice(0, -2);
   }
-  if (value.length > 4 && value.endsWith("s") && !value.endsWith("ss")) {
-    return value.slice(0, -1);
+  if (term.length > 4 && term.endsWith("s") && !term.endsWith("ss")) {
+    return term.slice(0, -1);
   }
-  return value;
+  return term;
 }
 
 /** Normalizes one Markdown file into one complete searchable knowledge entry. */
