@@ -1,0 +1,22 @@
+name: interview-answer-grid
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: interview-rag-postgres
+    environment:
+      POSTGRES_DB: interview_rag
+      POSTGRES_USER: interview
+      POSTGRES_PASSWORD: interview
+    ports:
+      - "54329:5432"
+    volumes:
+      - interview-rag-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U interview -d interview_rag"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+volumes:
+  interview-rag-data:
