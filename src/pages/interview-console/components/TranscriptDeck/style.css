@@ -112,6 +112,7 @@
   border-bottom: 1px solid var(--rule);
   color: inherit;
   background: transparent;
+  cursor: pointer;
   text-align: left;
   opacity: 0.66;
   transition: opacity 160ms ease, background 160ms ease;
@@ -121,6 +122,11 @@
 .transcript-turn.is-current {
   background: linear-gradient(100deg, rgba(255, 224, 207, 0.68), transparent 76%);
   opacity: 1;
+}
+
+.transcript-turn:focus-visible {
+  outline: 2px solid rgba(141, 120, 189, 0.72);
+  outline-offset: -2px;
 }
 
 .transcript-turn.is-current {
@@ -157,8 +163,10 @@
 
 .source-text,
 .translation-line p {
+  cursor: text;
   font-size: 13px;
   line-height: 1.48;
+  user-select: text;
 }
 
 .source-text {

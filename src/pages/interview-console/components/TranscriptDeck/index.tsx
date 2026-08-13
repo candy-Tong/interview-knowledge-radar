@@ -54,14 +54,21 @@ export function TranscriptDeck({
           </div>
         ) : (
           visibleSegments.map((segment) => (
-            <button
+            <div
               aria-pressed={segment.itemId === selectedSegmentId}
               className={`transcript-turn${
                 segment.itemId === selectedSegmentId ? " is-current" : ""
               }${segment.mode === RealtimeMode.Transcription ? " is-transcription" : ""}`}
               key={segment.itemId}
               onClick={() => onSelect(segment.itemId)}
-              type="button"
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  onSelect(segment.itemId);
+                }
+              }}
+              role="button"
+              tabIndex={0}
             >
               <div className="turn-index">
                 {String(segments.findIndex((value) => value.itemId === segment.itemId) + 1).padStart(
@@ -92,7 +99,7 @@ export function TranscriptDeck({
                   </div>
                 )}
               </div>
-            </button>
+            </div>
           ))
         )}
       </div>

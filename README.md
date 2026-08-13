@@ -81,8 +81,9 @@ npm run dev
 4. 在 Chrome 弹窗中选择正在播放面试声音的屏幕、窗口或标签页，并开启“同时分享系统音频”。
 5. 翻译模式显示英文原文和中文同传；普通模式只显示 ASR 原始转写，不调用翻译模型。
 6. 面试官仍在说话时，中栏和右栏就会根据当前原文刷新最多两条完整知识，并自动滚动到相关句；无需等待翻译完成。
-7. 点击左侧历史问题可切换对应知识；点击“知识库总览”可查看所有完整知识。
-8. 在知识库搜索框输入英文面试问题，按回车或点击“搜索”，即可模拟实时问答使用的混合检索。
+7. 中文翻译和原文都可以用鼠标选择，再使用系统快捷键复制；无需额外点击复制按钮。
+8. 点击左侧历史问题可切换对应知识；点击“知识库总览”可查看所有完整知识。
+9. 在知识库搜索框输入英文面试问题，按回车或点击“搜索”，即可模拟实时问答使用的混合检索。
 
 页面不会调用 `getUserMedia`。没有获取到系统音轨时会直接报错，不会回退到耳机或电脑麦克风。
 
@@ -119,8 +120,27 @@ npm run db:ingest:bm25
 | `DASHSCOPE_EMBEDDING_MODEL` | `text-embedding-v4` | 1024 维向量模型 |
 | `HOST` | `127.0.0.1` | Node.js 监听地址 |
 | `PORT` | `8787` | 页面、API 和 WebSocket 端口 |
+| `RUNTIME_LOG_DIR` | `runtime-logs` | 本地识别与召回复盘日志目录 |
 
 不要提交或输出真实 `.env`。默认 loopback 监听和 WebSocket Origin 白名单是本地凭据保护边界。
+
+## 运行日志与复盘
+
+服务按 UTC 日期把结构化 JSONL 写入 `runtime-logs/YYYY-MM-DD.jsonl`。每行都有 `timestamp`、`event`、`sessionId` 和 `mode`，并按事件附带：
+
+- `recognition.partial` / `recognition.segment.completed`：增量识别和 ASR 完整片段。
+- `translation.partial` / `translation.segment.completed`：增量及完整翻译片段。
+- `recognition.turn.final`：5 秒规则合并后的最终原文和翻译。
+- `knowledge.retrieval.*`：查询版本、耗时、是否被新查询取代，以及命中知识的来源、标题、排名、BM25/vector/hybrid 分数和相关文本。
+- `session.*` / `speech.*`：会话生命周期、语音起止和错误。
+
+可以用下面的命令查看最近记录：
+
+```bash
+tail -n 50 runtime-logs/$(date -u +%F).jsonl
+```
+
+日志包含面试原文与翻译，属于敏感本地数据。目录已被 Git 忽略，不会自动上传；不再需要时可由用户明确删除对应日期的 `.jsonl` 文件。
 
 ## 常用命令
 
@@ -150,6 +170,7 @@ npm run db:ingest:bm25
 - 系统音频只有在用户通过 Chrome 授权后才会采集；翻译模式发送给 LiveTranslate，普通模式发送给独立 Qwen3-ASR-Realtime。
 - Markdown 原文、BM25 词项、向量和检索结果保存在本机 PostgreSQL。
 - 完整知识在导入时发送给阿里云生成向量；说话过程中的节流原文和 ASR 完整原文会在检索时发送给阿里云生成查询向量。
+- 识别原文、翻译和知识召回元数据会写入本机 `runtime-logs/`，用于后续复盘优化，不会自动上传。
 - API Key 不进入前端包，由本地 Node.js 服务代理云端请求。
 - 服务默认只监听回环地址，并拒绝非本地页面发起的 WebSocket 连接。
 

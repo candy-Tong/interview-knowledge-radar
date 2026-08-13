@@ -118,6 +118,7 @@ DASHSCOPE_TRANSLATION_MODEL=qwen3.5-livetranslate-flash-realtime
 DASHSCOPE_ASR_MODEL=qwen3-asr-flash-realtime
 HOST=127.0.0.1
 PORT=8787
+RUNTIME_LOG_DIR=runtime-logs
 ```
 
 不要把真实值粘贴到聊天、日志、README 或部署报告。Agent 可以运行下面的检查；该命令只输出缺失的变量名，不输出变量值：
@@ -271,6 +272,7 @@ NODE
 7. 选择“翻译模式”并播放一段英文问题，确认中文翻译完成前已经出现最多两条完整知识，随后结果会随完整原文校准。
 8. 结束会话后切换“普通模式”，确认只出现原始 ASR 转写，不显示中文同传，并仍返回最多两条知识。
 9. 确认静音超过 5 秒才生成下一行，相关知识自动滚动到高亮句。
+10. 结束一次会话后检查 `runtime-logs/$(date -u +%F).jsonl`，确认包含 `recognition.turn.final` 和 `knowledge.retrieval.completed`，且没有 API Key 或连接凭据。
 
 第 5～6 步需要真实用户手势和系统权限，Agent 不得绕过授权。页面不会请求麦克风。
 

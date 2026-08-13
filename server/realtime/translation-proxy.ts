@@ -3,6 +3,11 @@ import type { IncomingMessage } from "node:http";
 import WebSocket, { WebSocketServer } from "ws";
 import { config, getRealtimeWebSocketUrl } from "../config.js";
 import { maximumKnowledgeResults, searchKnowledge } from "../knowledge/search.js";
+import {
+  type RuntimeLogEntry,
+  type RuntimeLogWriter,
+  writeRuntimeLog,
+} from "../runtime-log.js";
 
 export enum RealtimeMode {
   Translation = "translation",
@@ -28,6 +33,7 @@ type RealtimeProxyOptions = {
   search?: typeof searchKnowledge;
   turnGapMs?: number;
   progressiveSearchIntervalMs?: number;
+  runtimeLog?: RuntimeLogWriter;
 };
 
 const maximumQueuedChunks = 250;
@@ -142,11 +148,17 @@ export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}
       browserSocket.close(1011, "DashScope is not configured");
       return;
     }
-
     const queuedAudio: Buffer[] = [];
+    const sessionId = `session_${randomUUID().replaceAll("-", "")}`;
+    const runtimeLog =
+      options.runtimeLog ??
+      (config.NODE_ENV === "test"
+        ? async (_entry: RuntimeLogEntry) => undefined
+        : writeRuntimeLog);
     const translationToSource = new Map<string, string>();
     const sourceToTurn = new Map<string, string>();
     const pendingRetrievals = new Set<Promise<void>>();
+    const pendingRuntimeLogs = new Set<Promise<void>>();
     const retrievalVersionByTurn = new Map<string, number>();
     const lastRetrievalQueryByTurn = new Map<string, string>();
     const lastRetrievalStartedAtByTurn = new Map<string, number>();
@@ -163,6 +175,23 @@ export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}
       headers["OpenAI-Beta"] = "realtime=v1";
     }
     const upstreamSocket = new WebSocket(upstreamUrl, { headers });
+
+    /** Writes one session-scoped audit event without blocking the realtime stream. */
+    function logRuntimeEvent(event: string, details: Record<string, unknown> = {}) {
+      const pendingLog = runtimeLog({ event, sessionId, mode, ...details })
+        .catch((error) => {
+          console.error(
+            `Runtime log write failed: ${error instanceof Error ? error.message : "unknown error"}`,
+          );
+        })
+        .finally(() => {
+          pendingRuntimeLogs.delete(pendingLog);
+        });
+      pendingRuntimeLogs.add(pendingLog);
+      return pendingLog;
+    }
+
+    void logRuntimeEvent("session.started", { model });
 
     /** Wraps raw PCM bytes in the Alibaba Cloud realtime audio event. */
     function sendAudio(buffer: Buffer) {
@@ -183,12 +212,42 @@ export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}
     }
 
     /** Searches knowledge while suppressing responses superseded by a newer partial query. */
-    async function retrieveKnowledge(itemId: string, transcript: string, version: number) {
+    async function retrieveKnowledge(
+      itemId: string,
+      transcript: string,
+      version: number,
+      startedAt: number,
+    ) {
       try {
         const results = await search(transcript, maximumKnowledgeResults);
         if (retrievalVersionByTurn.get(itemId) !== version) {
+          void logRuntimeEvent("knowledge.retrieval.discarded", {
+            turnId: itemId,
+            query: transcript,
+            version,
+            durationMs: Date.now() - startedAt,
+            reason: "superseded",
+          });
           return;
         }
+        void logRuntimeEvent("knowledge.retrieval.completed", {
+          turnId: itemId,
+          query: transcript,
+          version,
+          durationMs: Date.now() - startedAt,
+          results: results.map((result, index) => ({
+            rank: index + 1,
+            id: result.id,
+            sourceName: result.sourceName,
+            heading: result.heading,
+            bm25Score: result.bm25Score,
+            vectorScore: result.vectorScore,
+            hybridScore: result.hybridScore,
+            focusStart: result.focusStart,
+            focusEnd: result.focusEnd,
+            focusText: result.content.slice(result.focusStart, result.focusEnd),
+          })),
+        });
         sendJson(browserSocket, {
           type: "knowledge.results",
           itemId,
@@ -197,12 +256,27 @@ export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}
         });
       } catch (error) {
         if (retrievalVersionByTurn.get(itemId) !== version) {
+          void logRuntimeEvent("knowledge.retrieval.discarded", {
+            turnId: itemId,
+            query: transcript,
+            version,
+            durationMs: Date.now() - startedAt,
+            reason: "superseded_error",
+          });
           return;
         }
+        const message = error instanceof Error ? error.message : "知识库检索失败。";
+        void logRuntimeEvent("knowledge.retrieval.failed", {
+          turnId: itemId,
+          query: transcript,
+          version,
+          durationMs: Date.now() - startedAt,
+          message,
+        });
         sendJson(browserSocket, {
           type: "knowledge.error",
           itemId,
-          message: error instanceof Error ? error.message : "知识库检索失败。",
+          message,
         });
       }
     }
@@ -218,7 +292,14 @@ export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}
       lastRetrievalStartedAtByTurn.set(itemId, Date.now());
       const version = (retrievalVersionByTurn.get(itemId) ?? 0) + 1;
       retrievalVersionByTurn.set(itemId, version);
-      const retrieval = retrieveKnowledge(itemId, query, version).finally(() => {
+      const startedAt = Date.now();
+      void logRuntimeEvent("knowledge.retrieval.started", {
+        turnId: itemId,
+        query,
+        version,
+        limit: maximumKnowledgeResults,
+      });
+      const retrieval = retrieveKnowledge(itemId, query, version, startedAt).finally(() => {
         pendingRetrievals.delete(retrieval);
       });
       pendingRetrievals.add(retrieval);
@@ -293,6 +374,11 @@ export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}
       const itemId = activeTurnId;
       const sourceText = joinTurnParts(sourceParts);
       const translatedText = joinTurnParts(translationParts);
+      void logRuntimeEvent("recognition.turn.final", {
+        turnId: itemId,
+        sourceText,
+        translatedText,
+      });
       activeTurnId = "";
       sourceParts = [];
       translationParts = [];
@@ -319,10 +405,12 @@ export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}
     function handleUpstreamEvent(event: AliyunEvent) {
       switch (event.type) {
         case "session.created":
+          void logRuntimeEvent("session.cloud_connected");
           sendJson(browserSocket, { type: "session.cloud_connected" });
           break;
         case "session.updated":
           isUpstreamReady = true;
+          void logRuntimeEvent("session.ready");
           sendJson(browserSocket, { type: "session.ready", mode });
           while (queuedAudio.length > 0) {
             sendAudio(queuedAudio.shift()!);
@@ -330,9 +418,11 @@ export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}
           break;
         case "input_audio_buffer.speech_started":
           clearTurnFlushTimer();
+          void logRuntimeEvent("speech.started", { turnId: activeTurnId || undefined });
           sendJson(browserSocket, { type: "speech.started" });
           break;
         case "input_audio_buffer.speech_stopped":
+          void logRuntimeEvent("speech.stopped", { turnId: activeTurnId || undefined });
           sendJson(browserSocket, { type: "speech.stopped" });
           if (sourceParts.length > 0) {
             scheduleTurnFlush();
@@ -361,6 +451,11 @@ export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}
               itemId,
               text: sourceText,
             });
+            void logRuntimeEvent("recognition.partial", {
+              sourceItemId: event.item_id,
+              turnId: itemId,
+              text: sourceText,
+            });
             scheduleProgressiveKnowledge(itemId, sourceText);
           }
           break;
@@ -374,6 +469,12 @@ export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}
               itemId,
               text: sourceText,
             });
+            void logRuntimeEvent("recognition.segment.completed", {
+              sourceItemId: event.item_id,
+              turnId: itemId,
+              transcript: event.transcript,
+              mergedText: sourceText,
+            });
             clearProgressiveSearchTimer();
             startKnowledgeRetrieval(itemId, sourceText);
             scheduleTurnFlush();
@@ -385,13 +486,20 @@ export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}
           }
           const sourceItemId = event.item_id && translationToSource.get(event.item_id);
           const itemId = (sourceItemId && sourceToTurn.get(sourceItemId)) || activeTurnId;
+          const translatedText = joinTurnParts([
+            ...translationParts,
+            `${event.text ?? ""}${event.stash ?? ""}`,
+          ]);
           sendJson(browserSocket, {
             type: "translation.partial",
             itemId,
-            text: joinTurnParts([
-              ...translationParts,
-              `${event.text ?? ""}${event.stash ?? ""}`,
-            ]),
+            text: translatedText,
+          });
+          void logRuntimeEvent("translation.partial", {
+            translationItemId: event.item_id,
+            sourceItemId,
+            turnId: itemId,
+            text: translatedText,
           });
           break;
         }
@@ -404,25 +512,41 @@ export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}
           if (event.text) {
             translationParts.push(event.text);
           }
+          const translatedText = joinTurnParts(translationParts);
           sendJson(browserSocket, {
             type: "translation.partial",
             itemId,
-            text: joinTurnParts(translationParts),
+            text: translatedText,
+          });
+          void logRuntimeEvent("translation.segment.completed", {
+            translationItemId: event.item_id,
+            sourceItemId,
+            turnId: itemId,
+            text: event.text ?? "",
+            mergedText: translatedText,
           });
           if (sourceParts.length > 0) {
             scheduleTurnFlush();
           }
           break;
         }
-        case "error":
+        case "error": {
+          const message = event.error?.message ?? "阿里云实时语音服务返回错误。";
+          void logRuntimeEvent("session.upstream_error", {
+            code: event.error?.code,
+            message,
+          });
           sendJson(browserSocket, {
             type: "session.error",
-            message: event.error?.message ?? "阿里云实时语音服务返回错误。",
+            message,
           });
           break;
+        }
         case "session.finished":
           flushTurn();
-          void Promise.allSettled([...pendingRetrievals]).then(() => {
+          void Promise.allSettled([...pendingRetrievals]).then(async () => {
+            await logRuntimeEvent("session.finished");
+            await Promise.allSettled([...pendingRuntimeLogs]);
             sendJson(browserSocket, { type: "session.finished" });
             upstreamSocket.close();
           });
@@ -431,12 +555,16 @@ export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}
     }
 
     upstreamSocket.on("open", () => {
+      void logRuntimeEvent("session.upstream_opened");
       upstreamSocket.send(JSON.stringify(createSessionUpdate(mode)));
     });
     upstreamSocket.on("message", (data) => {
       try {
         handleUpstreamEvent(JSON.parse(data.toString()) as AliyunEvent);
       } catch {
+        void logRuntimeEvent("session.protocol_error", {
+          message: "无法解析阿里云实时语音响应。",
+        });
         sendJson(browserSocket, {
           type: "session.error",
           message: "无法解析阿里云实时语音响应。",
@@ -444,10 +572,12 @@ export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}
       }
     });
     upstreamSocket.on("error", (error) => {
+      void logRuntimeEvent("session.socket_error", { message: error.message });
       sendJson(browserSocket, { type: "session.error", message: error.message });
     });
     upstreamSocket.on("close", () => {
       if (!isFinishing) {
+        void logRuntimeEvent("session.disconnected", { side: "upstream" });
         sendJson(browserSocket, { type: "session.disconnected" });
       }
     });
@@ -461,6 +591,7 @@ export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}
         const event = JSON.parse(data.toString()) as ClientEvent;
         if (event.type === "session.finish" && upstreamSocket.readyState === WebSocket.OPEN) {
           isFinishing = true;
+          void logRuntimeEvent("session.finish_requested");
           upstreamSocket.send(
             JSON.stringify({
               event_id: `event_${randomUUID().replaceAll("-", "")}`,
@@ -469,12 +600,18 @@ export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}
           );
         }
       } catch {
+        void logRuntimeEvent("session.protocol_error", {
+          message: "浏览器消息格式错误。",
+        });
         sendJson(browserSocket, { type: "session.error", message: "浏览器消息格式错误。" });
       }
     });
     browserSocket.on("close", () => {
       clearTurnFlushTimer();
       clearProgressiveSearchTimer();
+      void logRuntimeEvent("session.browser_disconnected", {
+        wasFinishing: isFinishing,
+      });
       if (upstreamSocket.readyState === WebSocket.OPEN) {
         upstreamSocket.close();
       }

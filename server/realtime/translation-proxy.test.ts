@@ -3,6 +3,7 @@ import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import WebSocket, { WebSocketServer } from "ws";
+import type { RuntimeLogEntry } from "../runtime-log.js";
 import {
   createRealtimeWebSocketServer,
   handleRealtimeUpgrade,
@@ -103,6 +104,7 @@ describe("translation proxy", () => {
     let knowledgeSearchCalls = 0;
     let receivedSession: Record<string, unknown> | undefined;
     let upstreamSocket: WebSocket | undefined;
+    const runtimeLogEntries: RuntimeLogEntry[] = [];
 
     upstreamServer.on("connection", (socket) => {
       upstreamSocket = socket;
@@ -140,6 +142,9 @@ describe("translation proxy", () => {
       apiKey: "test-key",
       turnGapMs: 20,
       progressiveSearchIntervalMs: 0,
+      runtimeLog: async (entry) => {
+        runtimeLogEntries.push(entry);
+      },
       search: async (query, limit) => {
         knowledgeSearchCalls += 1;
         requestedKnowledgeQuery = query;
@@ -289,6 +294,39 @@ describe("translation proxy", () => {
     const finished = waitForEvent(browserSocket, (event) => event.type === "session.finished");
     browserSocket.send(JSON.stringify({ type: "session.finish" }));
     await expect(finished).resolves.toMatchObject({ type: "session.finished" });
+    expect(runtimeLogEntries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: "recognition.partial",
+          turnId: "turn_source-1",
+          text: "Tell me about your monorepo",
+        }),
+        expect.objectContaining({
+          event: "recognition.segment.completed",
+          turnId: "turn_source-1",
+          transcript: "Tell me about your monorepo",
+        }),
+        expect.objectContaining({
+          event: "recognition.turn.final",
+          turnId: "turn_source-1",
+          sourceText: "Tell me about your monorepo and the main result",
+          translatedText: "请介绍你的大仓项目 以及主要结果",
+        }),
+        expect.objectContaining({
+          event: "knowledge.retrieval.completed",
+          turnId: "turn_source-1",
+          query: "Tell me about your monorepo and the main result",
+          results: [
+            expect.objectContaining({
+              rank: 1,
+              sourceName: "大仓-英文版本.md",
+              heading: "Monorepo",
+            }),
+          ],
+        }),
+        expect.objectContaining({ event: "session.finished" }),
+      ]),
+    );
   });
 
   it("suppresses stale progressive results when a newer partial query finishes first", async () => {

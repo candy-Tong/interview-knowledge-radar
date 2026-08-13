@@ -24,12 +24,14 @@ Node 服务同时提供 REST API、生产静态文件和 `/api/realtime` WebSock
 - API Key 只用于服务端到阿里云的请求；禁止加入 REST 响应和浏览器事件。
 - 保留 SIGINT/SIGTERM 的资源关闭流程，新增长连接或资源池时纳入 `shutdown()`。
 - 生产静态服务只读取 `dist/`；不要手工编辑构建产物。
+- `runtime-log.ts` 统一负责按日期追加 JSONL；实时模块只提交结构化字段，不自行读写日志文件。
 
 ## 安全边界
 
 - 默认 `HOST` 是 `127.0.0.1`。
 - WebSocket 只接受 `/api/realtime`，并校验 `localhost`、`127.0.0.1`、`[::1]` 以及已知端口。
 - SQL 使用参数化值；不要把查询文本、文件名或用户输入直接拼入 SQL。
+- `runtime-logs/` 包含识别和召回复盘数据，只保存在本机且被 Git 忽略；任何日志字段都不得包含密钥或连接凭据。
 
 ## 验证
 

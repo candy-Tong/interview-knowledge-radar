@@ -15,6 +15,7 @@ const envSchema = z.object({
   DASHSCOPE_ASR_MODEL: z.string().default("qwen3-asr-flash-realtime"),
   HOST: z.string().default("127.0.0.1"),
   PORT: z.coerce.number().int().positive().default(8787),
+  RUNTIME_LOG_DIR: z.string().min(1).default("runtime-logs"),
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
 });
 
