@@ -10,6 +10,10 @@
     "db:init": "tsx scripts/init-db.ts",
     "db:ingest": "tsx scripts/ingest-knowledge.ts",
     "db:ingest:bm25": "tsx scripts/ingest-knowledge.ts --bm25-only",
+    "review": "ocr review --audience agent",
+    "review:preview": "ocr review --preview",
+    "review:delegate": "ocr delegate preview",
+    "review:rules": "ocr delegate rule",
     "test": "vitest run"
   },
   "dependencies": {
@@ -23,6 +27,7 @@
     "zod": "^4.0.17"
   },
   "devDependencies": {
+    "@alibaba-group/open-code-review": "^1.9.2",
     "@types/express": "^5.0.3",
     "@types/node": "^24.3.0",
     "@types/pg": "^8.15.5",

@@ -14,6 +14,14 @@
 - 完成后先在 Issue 中回写解决方案、关键改动、验证结果和对应 commit，再关闭 Issue。
 - 如果当前无法解决，保留 Issue 为打开状态，并在 Issue 和对用户的回复中写明阻塞原因与下一步，不得用关闭代替完成。
 
+## Code Review 闭环
+
+- 以 [`CodeReview.md`](./CodeReview.md) 作为代码审查规则和通过标准，使用项目内的 OpenCodeReview 命令统一选取变更文件和解析审查规则。
+- 大改动完成实现并通过对应自动化验证后，必须先执行 `npm run review:preview`，再执行完整 code review；未审查或存在未处理的阻断问题时，不得宣布完成或关闭 Issue。
+- OpenCodeReview 已配置 LLM 时，执行 `npm run review -- --background "<需求与验收条件>"`；未配置时，使用 `npm run review:delegate` 取得文件范围，再用 `npm run review:rules -- <file...>` 取得规则，由当前编码 Agent 完成审查。不得因缺少 LLM 凭据而跳过审查。
+- 审查发现修复后，重新执行受影响的测试和 code review，直到没有未解决的阻断问题。
+- 将审查命令、发现、处置结果和剩余风险回写到当前 GitHub Issue；不提交 OpenCodeReview 的用户级配置、LLM 凭据或本地会话记录。
+
 ## 产品目标
 
 这是一个本地优先的实时面试辅助工具：浏览器采集用户主动共享的系统音频，Node 服务按模式代理阿里云实时翻译或独立实时 ASR，并用 PostgreSQL 中的 BM25 与 pgvector 混合检索本地面试知识。
