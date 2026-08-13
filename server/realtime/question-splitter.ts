@@ -6,7 +6,7 @@ const splitQuestionResponseSchema = z.object({
     .array(z.object({
       text: z.string().trim().min(2).max(1_000),
       needsContext: z.boolean(),
-      context: z.string().trim().min(1).max(1_000).nullable(),
+      contextSpans: z.array(z.string().trim().min(1).max(1_000)).max(4),
     }))
     .min(1)
     .max(6),
@@ -51,39 +51,48 @@ const questionSplitJsonSchema = {
         properties: {
           text: { type: "string", minLength: 2, maxLength: 1_000 },
           needsContext: { type: "boolean" },
-          context: {
-            anyOf: [
-              { type: "string", minLength: 1, maxLength: 1_000 },
-              { type: "null" },
-            ],
+          contextSpans: {
+            type: "array",
+            maxItems: 4,
+            items: { type: "string", minLength: 1, maxLength: 1_000 },
           },
         },
-        required: ["text", "needsContext", "context"],
+        required: ["text", "needsContext", "contextSpans"],
       },
     },
   },
   required: ["questions"],
 } as const;
 
-const systemPrompt = `Extract every distinct request from CURRENT TURN. RECENT CONTEXT may only resolve what those current requests refer to; it is never a source of additional requests.
+const systemPrompt = `The user sends JSON with currentTurn and recentContext. Extract every distinct request from currentTurn. recentContext may only resolve what those current requests refer to; it is never a source of additional requests.
 
-Return text, needsContext, and context for each request:
-- text: one verbatim, contiguous quote from CURRENT TURN. Never paraphrase, translate, or insert context into text. It may omit surrounding conversational filler.
-- needsContext: true only when text cannot identify its subject without RECENT CONTEXT.
-- context: when needsContext is true, copy all missing entities or topics from RECENT CONTEXT as one short factual phrase. When needsContext is false, use null. Never put a question or an answer here.
+Return text, needsContext, and contextSpans for each request:
+- text: one verbatim, contiguous quote from currentTurn. Never paraphrase, translate, or insert context into text. It may omit surrounding conversational filler.
+- needsContext: true only when text cannot identify its subject without recentContext.
+- contextSpans: when needsContext is true, copy the smallest exact contiguous quote or quotes from recentContext that identify every missing entity or topic. Do not join or rewrite separate quotes. When needsContext is false, use an empty array. Never put a question or an answer here.
 
 Choose context by meaning, not by keywords or language:
 1. Ask whether text alone tells a search engine exactly which entity or topic the request is about.
-2. If it does, or the request is genuinely topic-free, return needsContext: false and context: null. A request whose complete subject is the candidate, such as a general self-introduction, is topic-free; the existence of recent project context does not make it dependent.
-3. If it does not, return needsContext: true. context MUST contain the active topic plus every referent needed by the request. This applies to any elliptical follow-up, including ones that express the dependency without a pronoun.
+2. If it does, or the request is genuinely topic-free, return needsContext: false and contextSpans: []. A request whose complete subject is the candidate, such as a general self-introduction, is topic-free; the existence of recent project context does not make it dependent.
+3. If it does not, return needsContext: true. contextSpans MUST contain the active topic plus every referent needed by the request, copied exactly from RECENT CONTEXT. This applies to any elliptical follow-up, including ones that express the dependency without a pronoun.
 
 Examples:
-- RECENT CONTEXT: "Finance Customer Complaint Agent project"; CURRENT TURN: "Good, what was your role specifically?" -> text: "what was your role specifically?"; needsContext: true; context: "Finance Customer Complaint Agent project".
-- RECENT CONTEXT: "Finance Customer Complaint Agent project. You mentioned false positive alerts."; CURRENT TURN: "How did you reduce them?" -> text: "How did you reduce them?"; needsContext: true; context: "false positive alerts in the Finance Customer Complaint Agent project".
-- RECENT CONTEXT names another project; CURRENT TURN: "In the post-loan collection project, what was the hardest challenge?" -> needsContext: false; context: null because text names its topic.
-- RECENT CONTEXT names a project; CURRENT TURN: "Please introduce yourself in English." -> needsContext: false; context: null because the request is topic-free.
+- Input: {"currentTurn":"Good, what was your role specifically?","recentContext":["Now let's focus on your Finance Customer Complaint Agent project. What problem was it solving?"]}
+  Output: {"questions":[{"text":"what was your role specifically?","needsContext":true,"contextSpans":["Finance Customer Complaint Agent project"]}]}
+- Input: {"currentTurn":"How did you reduce them?","recentContext":["Finance Customer Complaint Agent project. You mentioned false positive alerts."]}
+  Output: {"questions":[{"text":"How did you reduce them?","needsContext":true,"contextSpans":["false positive alerts","Finance Customer Complaint Agent project"]}]}
+- Input: {"currentTurn":"Now, in the post-loan collection project, what was the hardest technical challenge?","recentContext":["Finance Customer Complaint Agent project"]}
+  Output: {"questions":[{"text":"Now, in the post-loan collection project, what was the hardest technical challenge?","needsContext":false,"contextSpans":[]}]}
+- Input: {"currentTurn":"Please introduce yourself in English.","recentContext":["Finance Customer Complaint Agent project"]}
+  Output: {"questions":[{"text":"Please introduce yourself in English.","needsContext":false,"contextSpans":[]}]}
 
-Split coordinated clauses only when they contain distinct requests. Keep constraints attached to their request. Preserve the original language and facts. Never invent a referent, repeat a historical question, or answer the interviewer.`;
+Split coordinated clauses only when they contain distinct requests. Keep constraints attached to their request. Preserve the original language and facts. Never invent a referent, repeat a historical question, or answer the interviewer.
+
+Before returning, mechanically verify:
+- Every text is an exact substring of currentTurn, including case and meaningful symbols.
+- Every contextSpans item is an exact substring of one recentContext array item and contains no question from either field.
+- If a proposed context span appears only in currentTurn, it is already present in text: set needsContext to false and contextSpans to [].
+- Prefer the shortest historical entity phrase; never copy an entire historical sentence when a smaller contiguous phrase identifies the referent.`;
 
 /** Joins one OpenAI-compatible path without depending on trailing-slash configuration. */
 function getLocalModelEndpoint(path: string) {
@@ -104,35 +113,124 @@ function createFallback(transcript: string, reason: string): QuestionSplitResult
 function normalizeQuote(value: string) {
   return value
     .normalize("NFKC")
-    .toLocaleLowerCase()
-    .replace(/[\p{P}\p{S}]+/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
 
-/** Keeps display questions tied to exact spans from the current turn. */
-function removeContextLeakage(
-  questions: InterviewQuestion[],
-  normalizedTranscript: string,
-) {
-  const currentTurn = normalizeQuote(normalizedTranscript);
-  return questions.filter((question) => {
-    const displayQuote = normalizeQuote(question.text);
-    return displayQuote.length > 0 && currentTurn.includes(displayQuote);
-  });
+/** Tracks normalized characters back to their original UTF-16 source range. */
+function normalizeQuoteWithMap(value: string) {
+  let normalized = "";
+  const starts: number[] = [];
+  const ends: number[] = [];
+  let sourceOffset = 0;
+
+  function append(character: string, start: number, end: number) {
+    normalized += character;
+    for (let index = 0; index < character.length; index += 1) {
+      starts.push(start);
+      ends.push(end);
+    }
+  }
+
+  for (const sourceCharacter of value) {
+    const start = sourceOffset;
+    sourceOffset += sourceCharacter.length;
+    const folded = sourceCharacter.normalize("NFKC");
+    for (const character of folded) {
+      if (/^\s$/u.test(character)) {
+        if (normalized && !normalized.endsWith(" ")) {
+          append(" ", start, sourceOffset);
+        }
+      } else {
+        append(character, start, sourceOffset);
+      }
+    }
+  }
+
+  const first = normalized.search(/\S/u);
+  if (first < 0) {
+    return { normalized: "", starts: [], ends: [] };
+  }
+  let last = normalized.length;
+  while (last > first && normalized[last - 1] === " ") {
+    last -= 1;
+  }
+  return {
+    normalized: normalized.slice(first, last),
+    starts: starts.slice(first, last),
+    ends: ends.slice(first, last),
+  };
 }
 
-/** Preserves the current request verbatim while appending only resolved context. */
-function createRetrievalQuery(
-  text: string,
-  needsContext: boolean,
-  context: string | null,
-) {
-  if (!needsContext) {
-    return text;
+/** Locates a normalized model quote and returns the original source spelling. */
+function findOriginalQuote(source: string, modelQuote: string) {
+  const mappedSource = normalizeQuoteWithMap(source);
+  const normalizedModelQuote = normalizeQuote(modelQuote);
+  const normalizedStart = mappedSource.normalized.indexOf(normalizedModelQuote);
+  if (normalizedStart < 0 || !normalizedModelQuote) {
+    return null;
   }
-  const normalizedContext = context?.trim().replace(/\s+/g, " ") ?? "";
-  return normalizedContext ? `${text}\n${normalizedContext}` : text;
+  const normalizedEnd = normalizedStart + normalizedModelQuote.length - 1;
+  const sourceStart = mappedSource.starts[normalizedStart];
+  const sourceEnd = mappedSource.ends[normalizedEnd];
+  if (sourceStart === undefined || sourceEnd === undefined) {
+    return null;
+  }
+  return source.slice(sourceStart, sourceEnd);
+}
+
+/** Resolves model spans back to historical source text or rejects hallucinated context. */
+function resolveContextSpans(
+  modelSpans: string[],
+  recentInterviewerTurns: string[],
+) {
+  const resolved: string[] = [];
+  const seen = new Set<string>();
+  for (const modelSpan of modelSpans) {
+    const originalSpan = recentInterviewerTurns
+      .map((turn) => findOriginalQuote(turn, modelSpan))
+      .find((span): span is string => Boolean(span));
+    if (!originalSpan) {
+      return null;
+    }
+    const key = normalizeQuote(originalSpan);
+    if (!seen.has(key)) {
+      seen.add(key);
+      resolved.push(originalSpan);
+    }
+  }
+  return resolved;
+}
+
+/** Grounds display and retrieval text in current and historical source spans. */
+function groundQuestions(
+  modelQuestions: z.infer<typeof splitQuestionResponseSchema>["questions"],
+  transcript: string,
+  recentInterviewerTurns: string[],
+) {
+  const questions: InterviewQuestion[] = [];
+  for (const modelQuestion of modelQuestions) {
+    const text = findOriginalQuote(transcript, modelQuestion.text);
+    if (!text) {
+      continue;
+    }
+    if (!modelQuestion.needsContext) {
+      questions.push({ text, retrievalQuery: text });
+      continue;
+    }
+    const contextSpans = resolveContextSpans(
+      modelQuestion.contextSpans,
+      recentInterviewerTurns,
+    );
+    if (!contextSpans?.length) {
+      return null;
+    }
+    questions.push({
+      text,
+      retrievalQuery: [text, ...contextSpans].join("\n"),
+    });
+  }
+  return questions.length > 0 ? questions : null;
 }
 
 /** Splits one interviewer turn through the loopback-only local model service. */
@@ -169,16 +267,12 @@ export async function splitInterviewQuestions(
           { role: "system", content: systemPrompt },
           {
             role: "user",
-            content: [
-              "<recent_context_reference_only>",
-              ...recentInterviewerTurns
+            content: JSON.stringify({
+              currentTurn: normalizedTranscript,
+              recentContext: recentInterviewerTurns
                 .map((turn) => turn.trim().replace(/\s+/g, " "))
                 .filter(Boolean),
-              "</recent_context_reference_only>",
-              "<current_turn_only_source_of_requests>",
-              normalizedTranscript,
-              "</current_turn_only_source_of_requests>",
-            ].join("\n"),
+            }),
           },
         ],
         response_format: {
@@ -208,15 +302,12 @@ export async function splitInterviewQuestions(
       return createFallback(normalizedTranscript, "local_model_invalid_schema");
     }
 
-    const questions = removeContextLeakage(parsed.data.questions.map((item) => ({
-      text: item.text.trim(),
-      retrievalQuery: createRetrievalQuery(
-        item.text.trim(),
-        item.needsContext,
-        item.context,
-      ),
-    })), normalizedTranscript);
-    return questions.length > 0
+    const questions = groundQuestions(
+      parsed.data.questions,
+      normalizedTranscript,
+      recentInterviewerTurns,
+    );
+    return questions
       ? { questions, usedFallback: false }
       : createFallback(normalizedTranscript, "local_model_ungrounded_questions");
   } catch (error) {

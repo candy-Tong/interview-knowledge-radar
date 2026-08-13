@@ -24,7 +24,7 @@
 - 每次新语音开始都取消待执行的 flush；静音持续超过默认 5 秒才 `flushTurn()`。
 - 一轮只发布一次 `source.final`；`source.partial` 达到可检索长度后，最多每 800ms 通过本地模型刷新拆题。
 - 同一 turn 的本地拆题保持 single-flight；模型忙时只保留最新草稿，最终拆题可中止正在运行的草稿并优先执行。
-- 本地模型返回当前 turn 中可验证的原句 `text`、语义判断 `needsContext`，以及来自最近三轮、仅用于补全指代的最小 `context`。服务端校验 `text` 确实来自当前 turn，并且只在 `needsContext=true` 时确定性组合 `text + context` 得到 `retrievalQuery`；禁止依靠特定语言的停用词或寒暄词枚举。
+- 本地模型返回当前 turn 中可定位的原句 `text`、语义判断 `needsContext`，以及从最近三轮逐字复制的最小 `contextSpans`。服务端从源文本回取展示原句，并验证每个历史片段；只有 `needsContext=true` 且片段全部可定位时才组合 `retrievalQuery`，否则回退当前 turn。禁止依靠特定语言的停用词或寒暄词枚举。
 - `retrievalQuery` 同时用于草稿 BM25 和最终 hybrid；本地模型失败时两者都安全回退到当前问题原文。
 - 草稿拆题中，已稳定的前缀问题不随后续 ASR 反复改写，只允许最后一题增长；最终 turn 可做完整校正。
 - 说话中每个问题只调用本地 BM25；5 秒 flush 后每个最终问题调用混合检索。不等待翻译事件。

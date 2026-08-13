@@ -15,12 +15,12 @@ describe("splitInterviewQuestions", () => {
             {
               text: "Please introduce yourself, focusing on frontend leadership.",
               needsContext: false,
-              context: null,
+              contextSpans: [],
             },
             {
               text: "What was your role in the Agent project?",
               needsContext: true,
-              context: "Finance Customer Complaint Agent project",
+              contextSpans: ["Finance Customer Complaint Agent project"],
             },
           ] }),
         },
@@ -77,12 +77,12 @@ describe("splitInterviewQuestions", () => {
             {
               text: "What problem was it solving?",
               needsContext: true,
-              context: "Finance Customer Complaint Agent project",
+              contextSpans: ["Finance Customer Complaint Agent project"],
             },
             {
-              text: "What was your role specifically?",
+              text: "what was your role specifically?",
               needsContext: true,
-              context: "Finance Customer Complaint Agent project",
+              contextSpans: ["Finance Customer Complaint Agent project"],
             },
           ] }),
         },
@@ -92,13 +92,13 @@ describe("splitInterviewQuestions", () => {
     await expect(splitInterviewQuestions({
       transcript: "Good, and what was your role specifically?",
       recentInterviewerTurns: [
-        "Let's discuss the complaint Agent. What problem was it solving?",
+        "Let's discuss the Finance Customer Complaint Agent project. What problem was it solving?",
       ],
     })).resolves.toMatchObject({
       questions: [{
-        text: "What was your role specifically?",
+        text: "what was your role specifically?",
         retrievalQuery:
-          "What was your role specifically?\nFinance Customer Complaint Agent project",
+          "what was your role specifically?\nFinance Customer Complaint Agent project",
       }],
       usedFallback: false,
     });
@@ -111,7 +111,7 @@ describe("splitInterviewQuestions", () => {
           content: JSON.stringify({ questions: [{
             text: "What problem was it solving?",
             needsContext: true,
-            context: "Finance Customer Complaint Agent project",
+            contextSpans: ["Finance Customer Complaint Agent project"],
           }] }),
         },
       }],
@@ -120,7 +120,7 @@ describe("splitInterviewQuestions", () => {
     await expect(splitInterviewQuestions({
       transcript: "Good, and what was your role specifically?",
       recentInterviewerTurns: [
-        "Let's discuss the complaint Agent. What problem was it solving?",
+        "Let's discuss the Finance Customer Complaint Agent project. What problem was it solving?",
       ],
     })).resolves.toEqual({
       questions: [{
@@ -139,8 +139,10 @@ describe("splitInterviewQuestions", () => {
           content: JSON.stringify({ questions: [{
             text: "How did you reduce them?",
             needsContext: true,
-            context:
-              "false positive alerts in the Finance Customer Complaint Agent project",
+            contextSpans: [
+              "false positive alerts",
+              "Finance Customer Complaint Agent project",
+            ],
           }] }),
         },
       }],
@@ -149,13 +151,13 @@ describe("splitInterviewQuestions", () => {
     await expect(splitInterviewQuestions({
       transcript: "How did you reduce them?",
       recentInterviewerTurns: [
-        "In the complaint Agent project, you mentioned false positive alerts.",
+        "In the Finance Customer Complaint Agent project, you mentioned false positive alerts.",
       ],
     })).resolves.toEqual({
       questions: [{
         text: "How did you reduce them?",
         retrievalQuery:
-          "How did you reduce them?\nfalse positive alerts in the Finance Customer Complaint Agent project",
+          "How did you reduce them?\nfalse positive alerts\nFinance Customer Complaint Agent project",
       }],
       usedFallback: false,
     });
@@ -168,7 +170,7 @@ describe("splitInterviewQuestions", () => {
           content: JSON.stringify({ questions: [{
             text: "Please introduce yourself in English.",
             needsContext: false,
-            context: "Finance Customer Complaint Agent project",
+            contextSpans: ["Finance Customer Complaint Agent project"],
           }] }),
         },
       }],
@@ -188,6 +190,54 @@ describe("splitInterviewQuestions", () => {
     });
   });
 
+  it("falls back when contextual text cannot be grounded in recent turns", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      choices: [{
+        message: {
+          content: JSON.stringify({ questions: [{
+            text: "What was your role specifically?",
+            needsContext: true,
+            contextSpans: ["Invented Project"],
+          }] }),
+        },
+      }],
+    }), { status: 200 })));
+
+    await expect(splitInterviewQuestions({
+      transcript: "What was your role specifically?",
+      recentInterviewerTurns: ["Let's discuss the monorepo migration."],
+    })).resolves.toMatchObject({
+      questions: [{
+        text: "What was your role specifically?",
+        retrievalQuery: "What was your role specifically?",
+      }],
+      usedFallback: true,
+      fallbackReason: "local_model_ungrounded_questions",
+    });
+  });
+
+  it("falls back when required context has no source spans", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      choices: [{
+        message: {
+          content: JSON.stringify({ questions: [{
+            text: "What was your role specifically?",
+            needsContext: true,
+            contextSpans: [],
+          }] }),
+        },
+      }],
+    }), { status: 200 })));
+
+    await expect(splitInterviewQuestions({
+      transcript: "What was your role specifically?",
+      recentInterviewerTurns: ["Let's discuss the monorepo migration."],
+    })).resolves.toMatchObject({
+      usedFallback: true,
+      fallbackReason: "local_model_ungrounded_questions",
+    });
+  });
+
   it("validates current-turn quotes without relying on an English word list", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
       choices: [{
@@ -195,7 +245,7 @@ describe("splitInterviewQuestions", () => {
           content: JSON.stringify({ questions: [{
             text: "你的具体职责是什么？",
             needsContext: true,
-            context: "财经智能客诉项目",
+            contextSpans: ["财经智能客诉项目"],
           }] }),
         },
       }],
@@ -220,7 +270,7 @@ describe("splitInterviewQuestions", () => {
           content: JSON.stringify({ questions: [{
             text: "在贷后催收项目中，最大的技术挑战是什么?",
             needsContext: false,
-            context: null,
+            contextSpans: [],
           }] }),
         },
       }],
@@ -231,10 +281,36 @@ describe("splitInterviewQuestions", () => {
       recentInterviewerTurns: ["之前讨论的是财经智能客诉项目。"],
     })).resolves.toMatchObject({
       questions: [{
-        text: "在贷后催收项目中，最大的技术挑战是什么?",
-        retrievalQuery: "在贷后催收项目中，最大的技术挑战是什么?",
+        text: "在贷后催收项目中，最大的技术挑战是什么？",
+        retrievalQuery: "在贷后催收项目中，最大的技术挑战是什么？",
       }],
       usedFallback: false,
+    });
+  });
+
+  it("does not treat different programming-language symbols as the same quote", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      choices: [{
+        message: {
+          content: JSON.stringify({ questions: [{
+            text: "How did you use C#?",
+            needsContext: false,
+            contextSpans: [],
+          }] }),
+        },
+      }],
+    }), { status: 200 })));
+
+    await expect(splitInterviewQuestions({
+      transcript: "How did you use C++?",
+      recentInterviewerTurns: [],
+    })).resolves.toMatchObject({
+      questions: [{
+        text: "How did you use C++?",
+        retrievalQuery: "How did you use C++?",
+      }],
+      usedFallback: true,
+      fallbackReason: "local_model_ungrounded_questions",
     });
   });
 });
