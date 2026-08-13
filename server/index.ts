@@ -115,7 +115,7 @@ server.on("upgrade", (request, socket, head) => {
 });
 server.listen(config.PORT, config.HOST, () => {
   console.log(
-    `Interview Answer Grid server listening on http://${config.HOST}:${config.PORT}`,
+    `Interview Knowledge Radar server listening on http://${config.HOST}:${config.PORT}`,
   );
 });
 

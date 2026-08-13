@@ -1,8 +1,8 @@
-# Answer Grid 本地部署指南
+# Interview Knowledge Radar 本地部署指南
 
 ## 部署目标
 
-该部署流程在一台电脑上运行完整的 Answer Grid：
+该部署流程在一台电脑上运行完整的 Interview Knowledge Radar：
 
 - Chrome 负责系统音频共享和界面展示。
 - Node.js 在 `127.0.0.1:8787` 提供静态页面、REST API 和 WebSocket 代理。
@@ -96,7 +96,7 @@ lsof -nP -iTCP:54329 -sTCP:LISTEN || true
 lsof -nP -iTCP:8787 -sTCP:LISTEN || true
 ```
 
-如果端口已被本项目现有 PostgreSQL 或 Answer Grid 占用，可以复用或先正常停止；无法确认进程归属时暂停，不要直接 `kill`。
+如果端口已被本项目现有 PostgreSQL 或 Interview Knowledge Radar 占用，可以复用或先正常停止；无法确认进程归属时暂停，不要直接 `kill`。
 
 ### 2. 准备服务端配置
 
@@ -187,7 +187,7 @@ npm start
 服务应输出：
 
 ```text
-Interview Answer Grid server listening on http://127.0.0.1:8787
+Interview Knowledge Radar server listening on http://127.0.0.1:8787
 ```
 
 保持该进程运行。Agent 使用长驻终端会话启动服务时，应记录会话状态；不要用无法追踪的后台命令启动多个副本。

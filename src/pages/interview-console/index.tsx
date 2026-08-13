@@ -79,10 +79,10 @@ export function InterviewConsolePage() {
       <div className="grid-noise" aria-hidden="true" />
       <header className="console-header">
         <div className="brand-lockup">
-          <span className="brand-mark">AG</span>
+          <span className="brand-mark">IKR</span>
           <div>
-            <p>ANSWER GRID</p>
-            <h1>面试知识雷达</h1>
+            <p>SYSTEM AUDIO · HYBRID RAG</p>
+            <h1>Interview Knowledge Radar</h1>
           </div>
         </div>
         <nav className="console-tabs" aria-label="页面视图" role="tablist">
