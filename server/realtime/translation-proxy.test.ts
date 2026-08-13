@@ -142,6 +142,7 @@ describe("translation proxy", () => {
       });
     });
 
+    const draftQueries: string[] = [];
     const searchQueries: string[] = [];
     const runtimeLogEntries: RuntimeLogEntry[] = [];
     const proxyHttpServer = createServer();
@@ -153,7 +154,10 @@ describe("translation proxy", () => {
       runtimeLog: async (entry) => {
         runtimeLogEntries.push(entry);
       },
-      draftSearch: async () => [],
+      draftSearch: async (query) => {
+        draftQueries.push(query);
+        return [];
+      },
       search: async (query) => {
         searchQueries.push(query);
         return [];
@@ -231,10 +235,14 @@ describe("translation proxy", () => {
     await expect(questions).resolves.toMatchObject({
       questions: [{ text: "What was your role specifically?" }],
     });
+    expect((await questions).questions?.[0]).not.toHaveProperty("retrievalQuery");
     await expect(followUpKnowledge).resolves.toMatchObject({
       query: "What was your specific role in the Finance Customer Complaint Agent project?",
     });
     expect(searchQueries).toContain(
+      "What was your specific role in the Finance Customer Complaint Agent project?",
+    );
+    expect(draftQueries).toContain(
       "What was your specific role in the Finance Customer Complaint Agent project?",
     );
     expect(runtimeLogEntries).toEqual(expect.arrayContaining([

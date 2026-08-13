@@ -5,7 +5,8 @@ const splitQuestionResponseSchema = z.object({
   questions: z
     .array(z.object({
       text: z.string().trim().min(2).max(1_000),
-      retrievalQuery: z.string().trim().min(2).max(1_000),
+      needsContext: z.boolean(),
+      context: z.string().trim().min(1).max(1_000).nullable(),
     }))
     .min(1)
     .max(6),
@@ -49,41 +50,40 @@ const questionSplitJsonSchema = {
         additionalProperties: false,
         properties: {
           text: { type: "string", minLength: 2, maxLength: 1_000 },
-          retrievalQuery: { type: "string", minLength: 2, maxLength: 1_000 },
+          needsContext: { type: "boolean" },
+          context: {
+            anyOf: [
+              { type: "string", minLength: 1, maxLength: 1_000 },
+              { type: "null" },
+            ],
+          },
         },
-        required: ["text", "retrievalQuery"],
+        required: ["text", "needsContext", "context"],
       },
     },
   },
   required: ["questions"],
 } as const;
 
-const systemPrompt = `You split and contextually rewrite an interviewer's current spoken turn for knowledge retrieval.
-The CURRENT TURN is the only source of requests. RECENT CONTEXT is reference material, never a request to repeat or answer.
-Return the minimum number of self-contained items needed to answer every distinct request.
-For each item, return text and retrievalQuery.
-text contains only the request expressed in CURRENT TURN and is suitable for display. Remove conversational acknowledgements such as "Good", "Thanks", "Okay", or "I see" when they are not part of the request.
-retrievalQuery starts from text and adds only the smallest missing referent from RECENT CONTEXT needed to make it independently searchable.
-Split coordinated clauses when each asks about a different topic, project, decision, process, reason, example, or result, even when they share one lead-in.
-Preserve the original language, names, projects, constraints, and emphasis.
-Rewrite pronouns such as it, that, this, and they with their explicit referent when needed to make each item independently searchable.
-Use recentInterviewerTurns only to resolve context required by the current request. Acknowledge words are never project or initiative names.
-Do not answer, summarize, add facts, invent project names, or split one request merely because it has supporting details.
-Never copy a question or request from RECENT CONTEXT into the output.
-When CURRENT TURN is already independently searchable, retrievalQuery must preserve it without adding an unrelated project from RECENT CONTEXT.
-An unfinished trailing request may remain as the final item.
+const systemPrompt = `Extract every distinct request from CURRENT TURN. RECENT CONTEXT may only resolve what those current requests refer to; it is never a source of additional requests.
+
+Return text, needsContext, and context for each request:
+- text: one verbatim, contiguous quote from CURRENT TURN. Never paraphrase, translate, or insert context into text. It may omit surrounding conversational filler.
+- needsContext: true only when text cannot identify its subject without RECENT CONTEXT.
+- context: when needsContext is true, copy all missing entities or topics from RECENT CONTEXT as one short factual phrase. When needsContext is false, use null. Never put a question or an answer here.
+
+Choose context by meaning, not by keywords or language:
+1. Ask whether text alone tells a search engine exactly which entity or topic the request is about.
+2. If it does, or the request is genuinely topic-free, return needsContext: false and context: null. A request whose complete subject is the candidate, such as a general self-introduction, is topic-free; the existence of recent project context does not make it dependent.
+3. If it does not, return needsContext: true. context MUST contain the active topic plus every referent needed by the request. This applies to any elliptical follow-up, including ones that express the dependency without a pronoun.
 
 Examples:
-- With recent context "Let's focus on your customer complaint agent project", "Good, what was your role specifically?" becomes text "What was your role specifically?" and retrievalQuery "What was your role specifically in the customer complaint agent project?".
-- With the same recent context, "Please introduce yourself in English." remains text and retrievalQuery "Please introduce yourself in English.".
-- "Please introduce yourself. How did you reduce false positives?" becomes two items.
-- "Please introduce yourself in English and focus on your leadership experience." remains one item because the second clause only constrains the introduction.`;
+- RECENT CONTEXT: "Finance Customer Complaint Agent project"; CURRENT TURN: "Good, what was your role specifically?" -> text: "what was your role specifically?"; needsContext: true; context: "Finance Customer Complaint Agent project".
+- RECENT CONTEXT: "Finance Customer Complaint Agent project. You mentioned false positive alerts."; CURRENT TURN: "How did you reduce them?" -> text: "How did you reduce them?"; needsContext: true; context: "false positive alerts in the Finance Customer Complaint Agent project".
+- RECENT CONTEXT names another project; CURRENT TURN: "In the post-loan collection project, what was the hardest challenge?" -> needsContext: false; context: null because text names its topic.
+- RECENT CONTEXT names a project; CURRENT TURN: "Please introduce yourself in English." -> needsContext: false; context: null because the request is topic-free.
 
-const questionScaffoldingWords = new Set([
-  "a", "an", "and", "are", "did", "do", "does", "for", "how", "in", "is",
-  "it", "me", "my", "of", "on", "or", "that", "the", "this", "to", "was",
-  "we", "were", "what", "when", "where", "which", "who", "why", "you", "your",
-]);
+Split coordinated clauses only when they contain distinct requests. Keep constraints attached to their request. Preserve the original language and facts. Never invent a referent, repeat a historical question, or answer the interviewer.`;
 
 /** Joins one OpenAI-compatible path without depending on trailing-slash configuration. */
 function getLocalModelEndpoint(path: string) {
@@ -100,23 +100,39 @@ function createFallback(transcript: string, reason: string): QuestionSplitResult
   };
 }
 
-/** Keeps multi-question output tied to the current turn instead of copied history. */
+/** Normalizes a quote without making assumptions about its language or vocabulary. */
+function normalizeQuote(value: string) {
+  return value
+    .normalize("NFKC")
+    .toLocaleLowerCase()
+    .replace(/[\p{P}\p{S}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Keeps display questions tied to exact spans from the current turn. */
 function removeContextLeakage(
   questions: InterviewQuestion[],
   normalizedTranscript: string,
 ) {
-  if (questions.length <= 1) {
-    return questions;
-  }
-  const currentTerms = new Set(
-    (normalizedTranscript.toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [])
-      .filter((term) => !questionScaffoldingWords.has(term)),
-  );
-  const groundedQuestions = questions.filter((question) => {
-    const outputTerms = question.text.toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
-    return outputTerms.some((term) => currentTerms.has(term));
+  const currentTurn = normalizeQuote(normalizedTranscript);
+  return questions.filter((question) => {
+    const displayQuote = normalizeQuote(question.text);
+    return displayQuote.length > 0 && currentTurn.includes(displayQuote);
   });
-  return groundedQuestions.length > 0 ? groundedQuestions : questions;
+}
+
+/** Preserves the current request verbatim while appending only resolved context. */
+function createRetrievalQuery(
+  text: string,
+  needsContext: boolean,
+  context: string | null,
+) {
+  if (!needsContext) {
+    return text;
+  }
+  const normalizedContext = context?.trim().replace(/\s+/g, " ") ?? "";
+  return normalizedContext ? `${text}\n${normalizedContext}` : text;
 }
 
 /** Splits one interviewer turn through the loopback-only local model service. */
@@ -194,11 +210,15 @@ export async function splitInterviewQuestions(
 
     const questions = removeContextLeakage(parsed.data.questions.map((item) => ({
       text: item.text.trim(),
-      retrievalQuery: item.retrievalQuery.trim(),
+      retrievalQuery: createRetrievalQuery(
+        item.text.trim(),
+        item.needsContext,
+        item.context,
+      ),
     })), normalizedTranscript);
     return questions.length > 0
       ? { questions, usedFallback: false }
-      : createFallback(normalizedTranscript, "local_model_no_questions");
+      : createFallback(normalizedTranscript, "local_model_ungrounded_questions");
   } catch (error) {
     if (signal?.aborted) {
       throw error;

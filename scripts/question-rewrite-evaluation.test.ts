@@ -19,10 +19,16 @@ describe("runQuestionRewriteEvaluation", () => {
         },
       ],
       {
-        rewrite: async (evaluationCase) => [{
-          text: evaluationCase.currentTurn,
-          retrievalQuery: evaluationCase.currentTurn,
-        }],
+        rewrite: async (evaluationCase) => ({
+          questions: [{
+            text: evaluationCase.currentTurn,
+            retrievalQuery: evaluationCase.currentTurn,
+          }],
+          usedFallback: evaluationCase.id === "complaint-role",
+          fallbackReason: evaluationCase.id === "complaint-role"
+            ? "local model unavailable"
+            : undefined,
+        }),
         judge: async (samples) => samples.map((sample) => ({
           id: sample.id,
           passed: sample.id === "standalone-introduction",
@@ -45,7 +51,12 @@ describe("runQuestionRewriteEvaluation", () => {
       meetsThreshold: false,
     });
     expect(result.cases).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: "complaint-role", passed: false }),
+      expect.objectContaining({
+        id: "complaint-role",
+        passed: false,
+        usedFallback: true,
+        reason: expect.stringContaining("local model unavailable"),
+      }),
     ]));
   });
 });

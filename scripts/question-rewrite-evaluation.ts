@@ -1,4 +1,7 @@
-import type { InterviewQuestion } from "../server/realtime/question-splitter.js";
+import type {
+  InterviewQuestion,
+  QuestionSplitResult,
+} from "../server/realtime/question-splitter.js";
 
 export type QuestionRewriteEvaluationCase = {
   id: string;
@@ -9,6 +12,8 @@ export type QuestionRewriteEvaluationCase = {
 
 export type QuestionRewriteSample = QuestionRewriteEvaluationCase & {
   questions: InterviewQuestion[];
+  usedFallback: boolean;
+  fallbackReason?: string;
 };
 
 export type QuestionRewriteJudgment = {
@@ -23,7 +28,7 @@ export type QuestionRewriteJudgment = {
 type EvaluationDependencies = {
   rewrite: (
     evaluationCase: QuestionRewriteEvaluationCase,
-  ) => Promise<InterviewQuestion[]>;
+  ) => Promise<QuestionSplitResult>;
   judge: (
     samples: QuestionRewriteSample[],
   ) => Promise<QuestionRewriteJudgment[]>;
@@ -37,9 +42,10 @@ export async function runQuestionRewriteEvaluation(
 ) {
   const samples: QuestionRewriteSample[] = [];
   for (const evaluationCase of cases) {
+    const rewrite = await dependencies.rewrite(evaluationCase);
     samples.push({
       ...evaluationCase,
-      questions: await dependencies.rewrite(evaluationCase),
+      ...rewrite,
     });
   }
 
@@ -50,7 +56,14 @@ export async function runQuestionRewriteEvaluation(
     if (!judgment) {
       throw new Error(`Evaluation judge omitted case: ${sample.id}`);
     }
-    return { ...sample, ...judgment };
+    return {
+      ...sample,
+      ...judgment,
+      passed: !sample.usedFallback && judgment.passed,
+      reason: sample.usedFallback
+        ? `Local rewrite fallback: ${sample.fallbackReason ?? "unknown reason"}. Judge: ${judgment.reason}`
+        : judgment.reason,
+    };
   });
   const passed = evaluatedCases.filter((evaluationCase) => evaluationCase.passed).length;
   const passRate = cases.length > 0 ? passed / cases.length : 0;

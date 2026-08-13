@@ -458,7 +458,7 @@ export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}
         type: "questions.updated",
         itemId: task.itemId,
         version: task.version,
-        questions,
+        questions: questions.map(({ id, text, isFinal }) => ({ id, text, isFinal })),
       });
       for (const question of questions) {
         startQuestionKnowledgeRetrieval(

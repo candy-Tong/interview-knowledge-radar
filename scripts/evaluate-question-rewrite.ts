@@ -119,11 +119,10 @@ async function main() {
     cases,
     {
       rewrite: async (evaluationCase) => {
-        const rewrite = await splitInterviewQuestions({
+        return splitInterviewQuestions({
           transcript: evaluationCase.currentTurn,
           recentInterviewerTurns: evaluationCase.recentInterviewerTurns,
         });
-        return rewrite.questions;
       },
       judge: judgeQuestionRewrites,
     },

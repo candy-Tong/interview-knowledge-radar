@@ -43,7 +43,7 @@ PORT=8787
 RUNTIME_LOG_DIR=runtime-logs
 ```
 
-`LOCAL_QUESTION_MODEL` 同时负责拆分一个 turn 中的多个问题，并使用最近的面试官轮次把省略上下文的追问改写为可独立检索的问题。页面展示原问题，BM25 和 hybrid 检索使用 `retrievalQuery`。
+`LOCAL_QUESTION_MODEL` 同时负责拆分一个 turn 中的多个问题。模型返回当前 turn 的原句问题、是否缺少上下文的语义判断，以及最近面试官轮次中的最小指代上下文；服务端验证原句，并且只在确实缺少上下文时组合出 `retrievalQuery`。页面只展示原句，BM25 和 hybrid 检索使用组合后的 query。实现不得依靠英语或其他特定语言的停用词枚举。
 
 ## 启动本地服务
 
