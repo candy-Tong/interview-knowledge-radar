@@ -16,6 +16,7 @@
 - `updateSegment()` 按 itemId 原位更新或追加，保持 turn 到达顺序。
 - WebSocket 打开前最多缓存 100 个 PCM 块；连接后按序发送并清空。
 - 服务端负责 5 秒 turn 合并，前端不要再按 partial/final 创建额外搜索行。
+- 同一 `itemId` 会在说话过程中收到多次 `knowledge.results`；始终原位覆盖当前行结果，成功刷新时清除旧检索错误。
 - stop 先停止本地采集，再发送 `session.finish` 给服务端等待最后一轮；5 秒后仅作为关闭兜底。
 - component unmount 时关闭 socket 和 capture，避免屏幕共享指示器残留。
 - `stopRef` 用于让 track ended 回调获得最新 stop 实现；修改时注意闭包陈旧问题。

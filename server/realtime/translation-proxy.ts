@@ -27,14 +27,23 @@ type RealtimeProxyOptions = {
   upstreamUrl?: string;
   search?: typeof searchKnowledge;
   turnGapMs?: number;
+  progressiveSearchIntervalMs?: number;
 };
 
 const maximumQueuedChunks = 250;
 const defaultTurnGapMs = 5_000;
+const defaultProgressiveSearchIntervalMs = 800;
 
 /** Joins adjacent ASR fragments without introducing punctuation not present in the transcript. */
 function joinTurnParts(parts: string[]) {
   return parts.map((part) => part.trim()).filter(Boolean).join(" ");
+}
+
+/** Avoids spending a retrieval on fragments that are too short to express intent. */
+function isMeaningfulProgressiveQuery(query: string) {
+  const words = query.trim().split(/\s+/).filter(Boolean);
+  const nonWhitespaceCharacters = [...query.replace(/\s/g, "")].length;
+  return words.length >= 3 || nonWhitespaceCharacters >= 6;
 }
 
 /** Sends a JSON event only while the browser WebSocket remains writable. */
@@ -123,6 +132,8 @@ export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}
     const apiKey = options.apiKey ?? config.DASHSCOPE_API_KEY;
     const search = options.search ?? searchKnowledge;
     const turnGapMs = options.turnGapMs ?? defaultTurnGapMs;
+    const progressiveSearchIntervalMs =
+      options.progressiveSearchIntervalMs ?? defaultProgressiveSearchIntervalMs;
     if (!upstreamUrl || !apiKey) {
       sendJson(browserSocket, {
         type: "session.error",
@@ -136,11 +147,16 @@ export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}
     const translationToSource = new Map<string, string>();
     const sourceToTurn = new Map<string, string>();
     const pendingRetrievals = new Set<Promise<void>>();
+    const retrievalVersionByTurn = new Map<string, number>();
+    const lastRetrievalQueryByTurn = new Map<string, string>();
+    const lastRetrievalStartedAtByTurn = new Map<string, number>();
     let isUpstreamReady = false;
     let activeTurnId = "";
     let sourceParts: string[] = [];
     let translationParts: string[] = [];
     let turnFlushTimer: ReturnType<typeof setTimeout> | undefined;
+    let progressiveSearchTimer: ReturnType<typeof setTimeout> | undefined;
+    let pendingProgressiveSearch: { itemId: string; query: string } | undefined;
     let isFinishing = false;
     const headers: Record<string, string> = { Authorization: `Bearer ${apiKey}` };
     if (mode === RealtimeMode.Transcription) {
@@ -166,10 +182,13 @@ export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}
       );
     }
 
-    /** Searches knowledge asynchronously after each finalized recognized utterance. */
-    async function retrieveKnowledge(itemId: string, transcript: string) {
+    /** Searches knowledge while suppressing responses superseded by a newer partial query. */
+    async function retrieveKnowledge(itemId: string, transcript: string, version: number) {
       try {
         const results = await search(transcript, maximumKnowledgeResults);
+        if (retrievalVersionByTurn.get(itemId) !== version) {
+          return;
+        }
         sendJson(browserSocket, {
           type: "knowledge.results",
           itemId,
@@ -177,11 +196,72 @@ export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}
           results,
         });
       } catch (error) {
+        if (retrievalVersionByTurn.get(itemId) !== version) {
+          return;
+        }
         sendJson(browserSocket, {
           type: "knowledge.error",
           itemId,
           message: error instanceof Error ? error.message : "知识库检索失败。",
         });
+      }
+    }
+
+    /** Starts one deduplicated retrieval and tracks it for graceful session shutdown. */
+    function startKnowledgeRetrieval(itemId: string, transcript: string) {
+      const query = transcript.trim().replace(/\s+/g, " ");
+      if (!query || lastRetrievalQueryByTurn.get(itemId) === query) {
+        return;
+      }
+
+      lastRetrievalQueryByTurn.set(itemId, query);
+      lastRetrievalStartedAtByTurn.set(itemId, Date.now());
+      const version = (retrievalVersionByTurn.get(itemId) ?? 0) + 1;
+      retrievalVersionByTurn.set(itemId, version);
+      const retrieval = retrieveKnowledge(itemId, query, version).finally(() => {
+        pendingRetrievals.delete(retrieval);
+      });
+      pendingRetrievals.add(retrieval);
+    }
+
+    /** Cancels a queued partial search without affecting requests already in flight. */
+    function clearProgressiveSearchTimer() {
+      if (progressiveSearchTimer) {
+        clearTimeout(progressiveSearchTimer);
+        progressiveSearchTimer = undefined;
+      }
+      pendingProgressiveSearch = undefined;
+    }
+
+    /** Refreshes the current turn during speech, capped to one request per interval. */
+    function scheduleProgressiveKnowledge(itemId: string, transcript: string) {
+      const query = transcript.trim().replace(/\s+/g, " ");
+      if (!isMeaningfulProgressiveQuery(query)) {
+        clearProgressiveSearchTimer();
+        return;
+      }
+      if (lastRetrievalQueryByTurn.get(itemId) === query) {
+        clearProgressiveSearchTimer();
+        return;
+      }
+
+      pendingProgressiveSearch = { itemId, query };
+      const elapsed = Date.now() - (lastRetrievalStartedAtByTurn.get(itemId) ?? 0);
+      const waitMs = Math.max(0, progressiveSearchIntervalMs - elapsed);
+      if (waitMs === 0) {
+        const request = pendingProgressiveSearch;
+        clearProgressiveSearchTimer();
+        startKnowledgeRetrieval(request.itemId, request.query);
+        return;
+      }
+      if (!progressiveSearchTimer) {
+        progressiveSearchTimer = setTimeout(() => {
+          const request = pendingProgressiveSearch;
+          clearProgressiveSearchTimer();
+          if (request) {
+            startKnowledgeRetrieval(request.itemId, request.query);
+          }
+        }, waitMs);
       }
     }
 
@@ -202,9 +282,10 @@ export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}
       }
     }
 
-    /** Publishes one merged turn and performs exactly one search for its full recognized text. */
+    /** Publishes one merged turn and ensures its full recognized text has been searched. */
     function flushTurn() {
       clearTurnFlushTimer();
+      clearProgressiveSearchTimer();
       if (!activeTurnId || sourceParts.length === 0) {
         return;
       }
@@ -225,10 +306,7 @@ export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}
         });
       }
 
-      const retrieval = retrieveKnowledge(itemId, sourceText).finally(() => {
-        pendingRetrievals.delete(retrieval);
-      });
-      pendingRetrievals.add(retrieval);
+      startKnowledgeRetrieval(itemId, sourceText);
     }
 
     /** Starts the silence window after which the next ASR item becomes a new row. */
@@ -274,25 +352,30 @@ export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}
           if (event.item_id) {
             clearTurnFlushTimer();
             const itemId = getTurnId(event.item_id);
+            const sourceText = joinTurnParts([
+              ...sourceParts,
+              `${event.text ?? ""}${event.stash ?? ""}`,
+            ]);
             sendJson(browserSocket, {
               type: "source.partial",
               itemId,
-              text: joinTurnParts([
-                ...sourceParts,
-                `${event.text ?? ""}${event.stash ?? ""}`,
-              ]),
+              text: sourceText,
             });
+            scheduleProgressiveKnowledge(itemId, sourceText);
           }
           break;
         case "conversation.item.input_audio_transcription.completed":
           if (event.item_id && event.transcript) {
             const itemId = getTurnId(event.item_id);
             sourceParts.push(event.transcript);
+            const sourceText = joinTurnParts(sourceParts);
             sendJson(browserSocket, {
               type: "source.partial",
               itemId,
-              text: joinTurnParts(sourceParts),
+              text: sourceText,
             });
+            clearProgressiveSearchTimer();
+            startKnowledgeRetrieval(itemId, sourceText);
             scheduleTurnFlush();
           }
           break;
@@ -391,6 +474,7 @@ export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}
     });
     browserSocket.on("close", () => {
       clearTurnFlushTimer();
+      clearProgressiveSearchTimer();
       if (upstreamSocket.readyState === WebSocket.OPEN) {
         upstreamSocket.close();
       }

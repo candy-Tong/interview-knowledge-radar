@@ -20,11 +20,13 @@
 
 - 同一轮中的多个 ASR item 合并到一个 `turn_*` itemId。
 - 每次新语音开始都取消待执行的 flush；静音持续超过默认 5 秒才 `flushTurn()`。
-- 一轮只发布一次 `source.final`，并只用合并后的完整英文触发一次检索。
+- 一轮只发布一次 `source.final`；`source.partial` 达到可检索长度后立即查询，随后最多每 800ms 使用最新原文刷新同一行。
+- 每个 ASR item 完成时立即用当前完整原文校准检索，不等待翻译事件；5 秒 flush 只负责确定行边界，并确保最终原文已经检索。
+- 同一 turn 的多次检索使用版本号抑制过期响应，前端只接收最新查询结果；相同查询必须去重。
 - 翻译 item 通过 `previous_item_id` 映射回 source item，再映射到逻辑 turn。
 - 会话结束时先 flush 当前轮并等待所有 `pendingRetrievals` settled，再通知前端结束。
 
-修改上述状态机时必须保留这些性质，避免一个问题产生多行或多次搜索。
+修改上述状态机时必须保留这些性质，避免一个问题产生多行、重复查询或无节制搜索。
 
 ## 资源与安全
 
@@ -37,8 +39,8 @@
 ## 测试
 
 - 测试使用本地 mock WebSocket 上游和注入的 search，不调用真实阿里云。
-- 缩短 `turnGapMs` 只用于测试；生产默认仍为 5 秒。
-- 至少断言模式对应的会话配置、普通模式不发翻译事件、相邻 ASR 片段合并、检索只调用一次、limit 为 2、结束前等待检索完成以及 Origin 拒绝逻辑。
+- 缩短 `turnGapMs` 或 `progressiveSearchIntervalMs` 只用于测试；生产默认分别为 5 秒和 800ms。
+- 至少断言模式对应的会话配置、普通模式不发翻译事件、相邻 ASR 片段合并、翻译完成前已有渐进检索、过期结果被抑制、limit 为 2、结束前等待检索完成以及 Origin 拒绝逻辑。
 
 ```bash
 npm test -- server/realtime/translation-proxy.test.ts

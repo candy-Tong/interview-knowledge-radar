@@ -14,6 +14,7 @@ type JsonEvent = {
   audio?: string;
   itemId?: string;
   text?: string;
+  query?: string;
   mode?: string;
   results?: Array<{ sourceName?: string }>;
   session?: Record<string, unknown>;
@@ -101,8 +102,10 @@ describe("translation proxy", () => {
     let requestedKnowledgeQuery = "";
     let knowledgeSearchCalls = 0;
     let receivedSession: Record<string, unknown> | undefined;
+    let upstreamSocket: WebSocket | undefined;
 
     upstreamServer.on("connection", (socket) => {
+      upstreamSocket = socket;
       openSockets.push(socket);
       socket.on("message", (data) => {
         const event = JSON.parse(data.toString()) as JsonEvent;
@@ -123,56 +126,6 @@ describe("translation proxy", () => {
               stash: "your monorepo",
             }),
           );
-          socket.send(
-            JSON.stringify({
-              type: "conversation.item.input_audio_transcription.completed",
-              item_id: "source-1",
-              transcript: "Tell me about your monorepo",
-            }),
-          );
-          socket.send(
-            JSON.stringify({
-              type: "conversation.item.created",
-              previous_item_id: "source-1",
-              item: { id: "translation-1", role: "assistant" },
-            }),
-          );
-          socket.send(
-            JSON.stringify({
-              type: "response.text.text",
-              item_id: "translation-1",
-              text: "请介绍",
-              stash: "你的大仓项目",
-            }),
-          );
-          socket.send(
-            JSON.stringify({
-              type: "response.text.done",
-              item_id: "translation-1",
-              text: "请介绍你的大仓项目",
-            }),
-          );
-          socket.send(
-            JSON.stringify({
-              type: "conversation.item.input_audio_transcription.completed",
-              item_id: "source-2",
-              transcript: "and the main result",
-            }),
-          );
-          socket.send(
-            JSON.stringify({
-              type: "conversation.item.created",
-              previous_item_id: "source-2",
-              item: { id: "translation-2", role: "assistant" },
-            }),
-          );
-          socket.send(
-            JSON.stringify({
-              type: "response.text.done",
-              item_id: "translation-2",
-              text: "以及主要结果",
-            }),
-          );
           return;
         }
         if (event.type === "session.finish") {
@@ -186,6 +139,7 @@ describe("translation proxy", () => {
       upstreamUrl: `ws://127.0.0.1:${upstreamPort}`,
       apiKey: "test-key",
       turnGapMs: 20,
+      progressiveSearchIntervalMs: 0,
       search: async (query, limit) => {
         knowledgeSearchCalls += 1;
         requestedKnowledgeQuery = query;
@@ -216,15 +170,16 @@ describe("translation proxy", () => {
     openSockets.push(browserSocket);
     await once(browserSocket, "open");
 
+    const receivedBrowserEvents: JsonEvent[] = [];
+    browserSocket.on("message", (data) => {
+      receivedBrowserEvents.push(JSON.parse(data.toString()) as JsonEvent);
+    });
     const ready = waitForEvent(browserSocket, (event) => event.type === "session.ready");
-    const source = waitForEvent(browserSocket, (event) => event.type === "source.final");
-    const translation = waitForEvent(
+    const progressiveKnowledge = waitForEvent(
       browserSocket,
-      (event) => event.type === "translation.final",
-    );
-    const knowledge = waitForEvent(
-      browserSocket,
-      (event) => event.type === "knowledge.results",
+      (event) =>
+        event.type === "knowledge.results" &&
+        event.query === "Tell me about your monorepo",
     );
     browserSocket.send(Buffer.from([1, 2, 3, 4]));
 
@@ -232,6 +187,79 @@ describe("translation proxy", () => {
       type: "session.ready",
       mode: "translation",
     });
+    await expect(progressiveKnowledge).resolves.toMatchObject({
+      itemId: "turn_source-1",
+      query: "Tell me about your monorepo",
+      results: [{ sourceName: "大仓-英文版本.md" }],
+    });
+    expect(
+      receivedBrowserEvents.some((event) =>
+        ["source.final", "translation.final"].includes(event.type ?? ""),
+      ),
+    ).toBe(false);
+
+    const source = waitForEvent(browserSocket, (event) => event.type === "source.final");
+    const translation = waitForEvent(
+      browserSocket,
+      (event) => event.type === "translation.final",
+    );
+    const finalKnowledge = waitForEvent(
+      browserSocket,
+      (event) =>
+        event.type === "knowledge.results" &&
+        event.query === "Tell me about your monorepo and the main result",
+    );
+    upstreamSocket?.send(
+      JSON.stringify({
+        type: "conversation.item.input_audio_transcription.completed",
+        item_id: "source-1",
+        transcript: "Tell me about your monorepo",
+      }),
+    );
+    upstreamSocket?.send(
+      JSON.stringify({
+        type: "conversation.item.created",
+        previous_item_id: "source-1",
+        item: { id: "translation-1", role: "assistant" },
+      }),
+    );
+    upstreamSocket?.send(
+      JSON.stringify({
+        type: "response.text.text",
+        item_id: "translation-1",
+        text: "请介绍",
+        stash: "你的大仓项目",
+      }),
+    );
+    upstreamSocket?.send(
+      JSON.stringify({
+        type: "response.text.done",
+        item_id: "translation-1",
+        text: "请介绍你的大仓项目",
+      }),
+    );
+    upstreamSocket?.send(
+      JSON.stringify({
+        type: "conversation.item.input_audio_transcription.completed",
+        item_id: "source-2",
+        transcript: "and the main result",
+      }),
+    );
+    upstreamSocket?.send(
+      JSON.stringify({
+        type: "conversation.item.created",
+        previous_item_id: "source-2",
+        item: { id: "translation-2", role: "assistant" },
+      }),
+    );
+    upstreamSocket?.send(
+      JSON.stringify({
+        type: "response.text.done",
+        item_id: "translation-2",
+        text: "以及主要结果",
+      }),
+    );
+
     await expect(source).resolves.toMatchObject({
       itemId: "turn_source-1",
       text: "Tell me about your monorepo and the main result",
@@ -240,13 +268,14 @@ describe("translation proxy", () => {
       itemId: "turn_source-1",
       text: "请介绍你的大仓项目 以及主要结果",
     });
-    await expect(knowledge).resolves.toMatchObject({
+    await expect(finalKnowledge).resolves.toMatchObject({
       itemId: "turn_source-1",
+      query: "Tell me about your monorepo and the main result",
       results: [{ sourceName: "大仓-英文版本.md" }],
     });
     expect(requestedKnowledgeLimit).toBe(2);
     expect(requestedKnowledgeQuery).toBe("Tell me about your monorepo and the main result");
-    expect(knowledgeSearchCalls).toBe(1);
+    expect(knowledgeSearchCalls).toBe(2);
     expect(Buffer.from(receivedAudio, "base64")).toEqual(Buffer.from([1, 2, 3, 4]));
     expect(receivedSession).toMatchObject({
       modalities: ["text"],
@@ -260,6 +289,102 @@ describe("translation proxy", () => {
     const finished = waitForEvent(browserSocket, (event) => event.type === "session.finished");
     browserSocket.send(JSON.stringify({ type: "session.finish" }));
     await expect(finished).resolves.toMatchObject({ type: "session.finished" });
+  });
+
+  it("suppresses stale progressive results when a newer partial query finishes first", async () => {
+    const upstreamHttpServer = createServer();
+    const upstreamServer = new WebSocketServer({ server: upstreamHttpServer });
+    const upstreamPort = await listen(upstreamHttpServer);
+    let releaseFirstSearch: () => void = () => undefined;
+    const firstSearchBlocked = new Promise<void>((resolve) => {
+      releaseFirstSearch = resolve;
+    });
+
+    upstreamServer.on("connection", (socket) => {
+      openSockets.push(socket);
+      socket.on("message", (data) => {
+        const event = JSON.parse(data.toString()) as JsonEvent;
+        if (event.type === "session.update") {
+          socket.send(JSON.stringify({ type: "session.updated" }));
+          return;
+        }
+        if (event.type === "input_audio_buffer.append") {
+          socket.send(
+            JSON.stringify({
+              type: "conversation.item.input_audio_transcription.text",
+              item_id: "source-stale",
+              text: "Tell me about monorepo",
+            }),
+          );
+          socket.send(
+            JSON.stringify({
+              type: "conversation.item.input_audio_transcription.text",
+              item_id: "source-stale",
+              text: "Tell me about monorepo ownership",
+            }),
+          );
+        }
+      });
+    });
+
+    const proxyHttpServer = createServer();
+    const proxyServer = createRealtimeWebSocketServer({
+      upstreamUrl: `ws://127.0.0.1:${upstreamPort}`,
+      apiKey: "test-key",
+      progressiveSearchIntervalMs: 0,
+      search: async (query) => {
+        if (query === "Tell me about monorepo") {
+          await firstSearchBlocked;
+        }
+        return [
+          {
+            id: query,
+            sourceName: `${query}.md`,
+            heading: query,
+            content: query,
+            bm25Score: 1,
+            vectorScore: 1,
+            hybridScore: 1,
+            focusStart: 0,
+            focusEnd: 0,
+          },
+        ];
+      },
+    });
+    proxyHttpServer.on("upgrade", (request, socket, head) => {
+      handleRealtimeUpgrade(proxyServer, request, socket, head);
+    });
+    const proxyPort = await listen(proxyHttpServer);
+    const browserSocket = new WebSocket(
+      `ws://127.0.0.1:${proxyPort}/api/realtime?mode=translation`,
+      { headers: { Origin: "http://localhost:5173" } },
+    );
+    openSockets.push(browserSocket);
+    await once(browserSocket, "open");
+
+    const receivedBrowserEvents: JsonEvent[] = [];
+    browserSocket.on("message", (data) => {
+      receivedBrowserEvents.push(JSON.parse(data.toString()) as JsonEvent);
+    });
+    const latestKnowledge = waitForEvent(
+      browserSocket,
+      (event) =>
+        event.type === "knowledge.results" &&
+        event.query === "Tell me about monorepo ownership",
+    );
+    browserSocket.send(Buffer.from([9, 10]));
+
+    await expect(latestKnowledge).resolves.toMatchObject({
+      query: "Tell me about monorepo ownership",
+    });
+    releaseFirstSearch();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(
+      receivedBrowserEvents.some(
+        (event) =>
+          event.type === "knowledge.results" && event.query === "Tell me about monorepo",
+      ),
+    ).toBe(false);
   });
 
   it("uses the standalone ASR session in transcription mode without translation", async () => {

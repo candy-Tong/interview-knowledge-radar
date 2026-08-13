@@ -122,7 +122,10 @@ export function useInterviewSession() {
         break;
       case "knowledge.results":
         setSegments((values) =>
-          updateSegment(values, itemId, mode, { knowledgeResults: event.results ?? [] }),
+          updateSegment(values, itemId, mode, {
+            knowledgeResults: event.results ?? [],
+            knowledgeError: undefined,
+          }),
         );
         break;
       case "knowledge.error":

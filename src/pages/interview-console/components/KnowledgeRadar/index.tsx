@@ -79,7 +79,7 @@ export function KnowledgeRadar({ segment }: KnowledgeRadarProps) {
             return (
               <div className="knowledge-empty" key={index}>
                 <Sparkles size={22} strokeWidth={1.2} />
-                <p>{segment?.isSourceFinal ? "正在检索完整知识…" : "等待对应知识"}</p>
+                <p>{segment?.sourceText ? "正在根据当前语音检索…" : "等待对应知识"}</p>
               </div>
             );
           }
