@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { BookMarked, LocateFixed, Sparkles } from "lucide-react";
 import type { InterviewQuestion, KnowledgeResult } from "../../types";
+import { calculateCenteredScrollTop } from "./scroll-position";
 import "./style.css";
 
 type KnowledgeRadarProps = {
@@ -58,8 +59,17 @@ export function KnowledgeRadar({ question }: KnowledgeRadarProps) {
         if (!anchor) {
           return;
         }
+        const scrollRegionBounds = scrollRegion.getBoundingClientRect();
+        const anchorBounds = anchor.getBoundingClientRect();
+        const anchorTop =
+          scrollRegion.scrollTop + anchorBounds.top - scrollRegionBounds.top;
         scrollRegion.scrollTo({
-          top: Math.max(anchor.offsetTop - 56, 0),
+          top: calculateCenteredScrollTop({
+            anchorHeight: anchorBounds.height,
+            anchorTop,
+            contentHeight: scrollRegion.scrollHeight,
+            viewportHeight: scrollRegion.clientHeight,
+          }),
           behavior: "smooth",
         });
       });

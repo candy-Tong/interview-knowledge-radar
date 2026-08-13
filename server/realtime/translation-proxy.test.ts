@@ -463,6 +463,209 @@ describe("translation proxy", () => {
     ).toBe(false);
   });
 
+  it("coalesces rapid partial transcripts without overlapping question split calls", async () => {
+    const upstreamHttpServer = createServer();
+    const upstreamServer = new WebSocketServer({ server: upstreamHttpServer });
+    const upstreamPort = await listen(upstreamHttpServer);
+    let releaseFirstSplit: () => void = () => undefined;
+    const firstSplitBlocked = new Promise<void>((resolve) => {
+      releaseFirstSplit = resolve;
+    });
+    let markFirstSplitStarted: () => void = () => undefined;
+    const firstSplitStarted = new Promise<void>((resolve) => {
+      markFirstSplitStarted = resolve;
+    });
+    const splitCalls: string[] = [];
+    let activeSplitCalls = 0;
+    let maximumActiveSplitCalls = 0;
+
+    upstreamServer.on("connection", (socket) => {
+      openSockets.push(socket);
+      socket.on("message", (data) => {
+        const event = JSON.parse(data.toString()) as JsonEvent;
+        if (event.type === "session.update") {
+          socket.send(JSON.stringify({ type: "session.updated" }));
+          return;
+        }
+        if (event.type === "input_audio_buffer.append") {
+          for (const text of [
+            "Explain your frontend leadership",
+            "Explain your frontend leadership and complaint agent",
+            "Explain your frontend leadership and complaint agent impact",
+          ]) {
+            socket.send(JSON.stringify({
+              type: "conversation.item.input_audio_transcription.text",
+              item_id: "source-coalesced",
+              text,
+            }));
+          }
+        }
+      });
+    });
+
+    const proxyHttpServer = createServer();
+    const proxyServer = createRealtimeWebSocketServer({
+      upstreamUrl: `ws://127.0.0.1:${upstreamPort}`,
+      apiKey: "test-key",
+      progressiveSearchIntervalMs: 0,
+      draftSearch: async () => [],
+      splitQuestions: async (transcript) => {
+        splitCalls.push(transcript);
+        activeSplitCalls += 1;
+        maximumActiveSplitCalls = Math.max(maximumActiveSplitCalls, activeSplitCalls);
+        try {
+          if (splitCalls.length === 1) {
+            markFirstSplitStarted();
+            await firstSplitBlocked;
+          }
+          return { questions: [transcript], usedFallback: false };
+        } finally {
+          activeSplitCalls -= 1;
+        }
+      },
+    });
+    proxyHttpServer.on("upgrade", (request, socket, head) => {
+      handleRealtimeUpgrade(proxyServer, request, socket, head);
+    });
+    const proxyPort = await listen(proxyHttpServer);
+    const browserSocket = new WebSocket(
+      `ws://127.0.0.1:${proxyPort}/api/realtime?mode=translation`,
+      { headers: { Origin: "http://localhost:5173" } },
+    );
+    openSockets.push(browserSocket);
+    await once(browserSocket, "open");
+
+    const latestQuestions = waitForEvent(
+      browserSocket,
+      (event) =>
+        event.type === "questions.updated" &&
+        event.questions?.[0]?.text ===
+          "Explain your frontend leadership and complaint agent impact",
+    );
+    browserSocket.send(Buffer.from([11, 12]));
+
+    try {
+      await firstSplitStarted;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(maximumActiveSplitCalls).toBe(1);
+    } finally {
+      releaseFirstSplit();
+    }
+
+    await expect(latestQuestions).resolves.toBeDefined();
+    expect(splitCalls).toEqual([
+      "Explain your frontend leadership",
+      "Explain your frontend leadership and complaint agent impact",
+    ]);
+    expect(maximumActiveSplitCalls).toBe(1);
+  });
+
+  it("preempts an active draft split when the turn becomes final", async () => {
+    const upstreamHttpServer = createServer();
+    const upstreamServer = new WebSocketServer({ server: upstreamHttpServer });
+    const upstreamPort = await listen(upstreamHttpServer);
+    let releaseDraft: () => void = () => undefined;
+    const draftBlocked = new Promise<void>((resolve) => {
+      releaseDraft = resolve;
+    });
+    let draftWasAborted = false;
+    let splitCallCount = 0;
+    let activeSplitCalls = 0;
+    let maximumActiveSplitCalls = 0;
+
+    upstreamServer.on("connection", (socket) => {
+      openSockets.push(socket);
+      socket.on("message", (data) => {
+        const event = JSON.parse(data.toString()) as JsonEvent;
+        if (event.type === "session.update") {
+          socket.send(JSON.stringify({ type: "session.updated" }));
+          return;
+        }
+        if (event.type === "input_audio_buffer.append") {
+          socket.send(JSON.stringify({
+            type: "conversation.item.input_audio_transcription.text",
+            item_id: "source-final-priority",
+            text: "Explain your frontend leadership and complaint agent",
+          }));
+          socket.send(JSON.stringify({
+            type: "conversation.item.input_audio_transcription.completed",
+            item_id: "source-final-priority",
+            transcript: "Explain your frontend leadership and complaint agent",
+          }));
+          socket.send(JSON.stringify({ type: "input_audio_buffer.speech_stopped" }));
+        }
+      });
+    });
+
+    const proxyHttpServer = createServer();
+    const proxyServer = createRealtimeWebSocketServer({
+      upstreamUrl: `ws://127.0.0.1:${upstreamPort}`,
+      apiKey: "test-key",
+      turnGapMs: 10,
+      progressiveSearchIntervalMs: 0,
+      draftSearch: async () => [],
+      search: async () => [],
+      splitQuestions: async (transcript, signal?: AbortSignal) => {
+        splitCallCount += 1;
+        activeSplitCalls += 1;
+        maximumActiveSplitCalls = Math.max(maximumActiveSplitCalls, activeSplitCalls);
+        try {
+          if (splitCallCount === 1) {
+            await Promise.race([
+              draftBlocked,
+              new Promise<never>((_resolve, reject) => {
+                signal?.addEventListener("abort", () => {
+                  draftWasAborted = true;
+                  reject(new DOMException("Aborted", "AbortError"));
+                }, { once: true });
+              }),
+            ]);
+          }
+          return { questions: [transcript], usedFallback: false };
+        } finally {
+          activeSplitCalls -= 1;
+        }
+      },
+    });
+    proxyHttpServer.on("upgrade", (request, socket, head) => {
+      handleRealtimeUpgrade(proxyServer, request, socket, head);
+    });
+    const proxyPort = await listen(proxyHttpServer);
+    const browserSocket = new WebSocket(
+      `ws://127.0.0.1:${proxyPort}/api/realtime?mode=translation`,
+      { headers: { Origin: "http://localhost:5173" } },
+    );
+    openSockets.push(browserSocket);
+    await once(browserSocket, "open");
+
+    const receivedBrowserEvents: JsonEvent[] = [];
+    browserSocket.on("message", (data) => {
+      receivedBrowserEvents.push(JSON.parse(data.toString()) as JsonEvent);
+    });
+    const finalQuestions = waitForEvent(
+      browserSocket,
+      (event) =>
+        event.type === "questions.updated" &&
+        event.questions?.every((question) => question.isFinal) === true,
+    );
+    browserSocket.send(Buffer.from([13, 14]));
+
+    try {
+      await expect(finalQuestions).resolves.toBeDefined();
+      expect(draftWasAborted).toBe(true);
+      expect(maximumActiveSplitCalls).toBe(1);
+      expect(
+        receivedBrowserEvents.some(
+          (event) =>
+            event.type === "questions.updated" &&
+            event.questions?.some((question) => question.isFinal === false),
+        ),
+      ).toBe(false);
+    } finally {
+      releaseDraft();
+    }
+  });
+
   it("uses standalone ASR and retrieves two knowledge sets for a compound turn", async () => {
     const upstreamHttpServer = createServer();
     const upstreamServer = new WebSocketServer({ server: upstreamHttpServer });

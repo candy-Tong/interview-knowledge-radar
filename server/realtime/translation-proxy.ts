@@ -40,7 +40,10 @@ type RealtimeProxyOptions = {
   upstreamUrl?: string;
   search?: typeof searchKnowledge;
   draftSearch?: typeof searchKnowledgeBm25;
-  splitQuestions?: (transcript: string) => Promise<QuestionSplitResult>;
+  splitQuestions?: (
+    transcript: string,
+    signal?: AbortSignal,
+  ) => Promise<QuestionSplitResult>;
   turnGapMs?: number;
   progressiveSearchIntervalMs?: number;
   runtimeLog?: RuntimeLogWriter;
@@ -54,6 +57,11 @@ type PendingQuestionAnalysis = {
   itemId: string;
   transcript: string;
   isFinal: boolean;
+};
+
+type QuestionAnalysisTask = PendingQuestionAnalysis & {
+  controller: AbortController;
+  version: number;
 };
 
 type QuestionState = {
@@ -178,7 +186,10 @@ export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}
     const search = options.search ?? searchKnowledge;
     const draftSearch =
       options.draftSearch ?? (options.search ? options.search : searchKnowledgeBm25);
-    const splitQuestions: (transcript: string) => Promise<QuestionSplitResult> =
+    const splitQuestions: (
+      transcript: string,
+      signal?: AbortSignal,
+    ) => Promise<QuestionSplitResult> =
       options.splitQuestions ??
       (config.NODE_ENV === "test"
         ? async (transcript: string) => ({
@@ -211,6 +222,8 @@ export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}
     const pendingQuestionAnalyses = new Set<Promise<void>>();
     const pendingRuntimeLogs = new Set<Promise<void>>();
     const questionAnalysisVersionByTurn = new Map<string, number>();
+    const activeQuestionAnalysisByTurn = new Map<string, QuestionAnalysisTask>();
+    const queuedQuestionAnalysisByTurn = new Map<string, QuestionAnalysisTask>();
     const questionStateByTurn = new Map<string, QuestionState>();
     const lastQuestionAnalysisByTurn = new Map<string, string>();
     const lastQuestionAnalysisStartedAtByTurn = new Map<string, number>();
@@ -398,38 +411,30 @@ export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}
 
     /** Applies the latest split and starts one independent retrieval per question. */
     async function analyzeQuestions(
-      request: PendingQuestionAnalysis,
-      version: number,
+      task: QuestionAnalysisTask,
       startedAt: number,
     ) {
-      const result = await splitQuestions(request.transcript);
-      if (questionAnalysisVersionByTurn.get(request.itemId) !== version) {
-        void logRuntimeEvent("question.split.discarded", {
-          turnId: request.itemId,
-          transcript: request.transcript,
-          version,
-          durationMs: Date.now() - startedAt,
-          reason: "superseded",
-        });
-        return;
+      const result = await splitQuestions(task.transcript, task.controller.signal);
+      if (task.controller.signal.aborted) {
+        throw new DOMException("Question analysis was superseded", "AbortError");
       }
 
-      const previousState = questionStateByTurn.get(request.itemId);
-      const questionTexts = stabilizeQuestionTexts(previousState, result, request.isFinal);
-      questionStateByTurn.set(request.itemId, {
+      const previousState = questionStateByTurn.get(task.itemId);
+      const questionTexts = stabilizeQuestionTexts(previousState, result, task.isFinal);
+      questionStateByTurn.set(task.itemId, {
         questions: questionTexts,
         usedFallback: result.usedFallback,
       });
       const questions = questionTexts.map((text, index) => ({
-        id: `${request.itemId}_q${index + 1}`,
+        id: `${task.itemId}_q${index + 1}`,
         text,
-        isFinal: request.isFinal,
+        isFinal: task.isFinal,
       }));
       void logRuntimeEvent("question.split.completed", {
-        turnId: request.itemId,
-        transcript: request.transcript,
-        version,
-        isFinal: request.isFinal,
+        turnId: task.itemId,
+        transcript: task.transcript,
+        version: task.version,
+        isFinal: task.isFinal,
         usedFallback: result.usedFallback,
         fallbackReason: result.fallbackReason,
         durationMs: Date.now() - startedAt,
@@ -437,21 +442,66 @@ export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}
       });
       sendJson(browserSocket, {
         type: "questions.updated",
-        itemId: request.itemId,
-        version,
+        itemId: task.itemId,
+        version: task.version,
         questions,
       });
       for (const question of questions) {
         startQuestionKnowledgeRetrieval(
-          request.itemId,
+          task.itemId,
           question.id,
           question.text,
-          request.isFinal,
+          task.isFinal,
         );
       }
     }
 
-    /** Starts one versioned local-model analysis and tracks it through shutdown. */
+    /** Drains one turn's local-model work serially, consuming only its latest queued request. */
+    async function runQuestionAnalysisQueue(initialTask: QuestionAnalysisTask) {
+      let task: QuestionAnalysisTask | undefined = initialTask;
+      while (task) {
+        activeQuestionAnalysisByTurn.set(task.itemId, task);
+        const startedAt = Date.now();
+        void logRuntimeEvent("question.split.started", {
+          turnId: task.itemId,
+          transcript: task.transcript,
+          version: task.version,
+          isFinal: task.isFinal,
+        });
+        try {
+          await analyzeQuestions(task, startedAt);
+        } catch (error) {
+          if (task.controller.signal.aborted) {
+            void logRuntimeEvent("question.split.discarded", {
+              turnId: task.itemId,
+              transcript: task.transcript,
+              version: task.version,
+              durationMs: Date.now() - startedAt,
+              reason: "final_priority",
+            });
+          } else {
+            void logRuntimeEvent("question.split.failed", {
+              turnId: task.itemId,
+              transcript: task.transcript,
+              version: task.version,
+              message: error instanceof Error ? error.message : "问题拆分失败。",
+            });
+          }
+        } finally {
+          if (activeQuestionAnalysisByTurn.get(task.itemId) === task) {
+            activeQuestionAnalysisByTurn.delete(task.itemId);
+          }
+        }
+
+        const queuedTask = queuedQuestionAnalysisByTurn.get(task.itemId);
+        if (queuedTask) {
+          queuedQuestionAnalysisByTurn.delete(task.itemId);
+        }
+        task = queuedTask;
+      }
+    }
+
+    /** Coalesces progressive transcripts so one turn never overlaps local-model calls. */
     function startQuestionAnalysis(request: PendingQuestionAnalysis) {
       const transcript = request.transcript.trim().replace(/\s+/g, " ");
       const analysisIdentity = `${request.isFinal ? "final" : "draft"}:${transcript}`;
@@ -462,22 +512,30 @@ export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}
       lastQuestionAnalysisStartedAtByTurn.set(request.itemId, Date.now());
       const version = (questionAnalysisVersionByTurn.get(request.itemId) ?? 0) + 1;
       questionAnalysisVersionByTurn.set(request.itemId, version);
-      const startedAt = Date.now();
-      void logRuntimeEvent("question.split.started", {
-        turnId: request.itemId,
+      const task: QuestionAnalysisTask = {
+        ...request,
         transcript,
         version,
-        isFinal: request.isFinal,
-      });
-      const analysis = analyzeQuestions({ ...request, transcript }, version, startedAt)
-        .catch((error) => {
-          void logRuntimeEvent("question.split.failed", {
-            turnId: request.itemId,
-            transcript,
-            version,
-            message: error instanceof Error ? error.message : "问题拆分失败。",
-          });
-        })
+        controller: new AbortController(),
+      };
+      const activeTask = activeQuestionAnalysisByTurn.get(request.itemId);
+      if (activeTask) {
+        const queuedTask = queuedQuestionAnalysisByTurn.get(request.itemId);
+        queuedQuestionAnalysisByTurn.set(request.itemId, task);
+        void logRuntimeEvent("question.split.coalesced", {
+          turnId: request.itemId,
+          transcript,
+          version,
+          isFinal: request.isFinal,
+          replacedVersion: queuedTask?.version,
+        });
+        if (request.isFinal && !activeTask.isFinal) {
+          activeTask.controller.abort();
+        }
+        return;
+      }
+
+      const analysis = runQuestionAnalysisQueue(task)
         .finally(() => pendingQuestionAnalyses.delete(analysis));
       pendingQuestionAnalyses.add(analysis);
     }
@@ -787,6 +845,10 @@ export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}
     browserSocket.on("close", () => {
       clearTurnFlushTimer();
       clearProgressiveSearchTimer();
+      queuedQuestionAnalysisByTurn.clear();
+      for (const task of activeQuestionAnalysisByTurn.values()) {
+        task.controller.abort();
+      }
       void logRuntimeEvent("session.browser_disconnected", {
         wasFinishing: isFinishing,
       });

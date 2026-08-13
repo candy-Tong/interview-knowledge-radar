@@ -73,7 +73,10 @@ function createFallback(transcript: string, reason: string): QuestionSplitResult
 }
 
 /** Splits one interviewer turn through the loopback-only local model service. */
-export async function splitInterviewQuestions(transcript: string): Promise<QuestionSplitResult> {
+export async function splitInterviewQuestions(
+  transcript: string,
+  signal?: AbortSignal,
+): Promise<QuestionSplitResult> {
   const normalizedTranscript = transcript.trim().replace(/\s+/g, " ");
   if (!normalizedTranscript) {
     return createFallback(transcript, "empty_transcript");
@@ -81,6 +84,14 @@ export async function splitInterviewQuestions(transcript: string): Promise<Quest
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), config.LOCAL_QUESTION_MODEL_TIMEOUT_MS);
+  function handleAbort() {
+    controller.abort();
+  }
+  if (signal?.aborted) {
+    controller.abort();
+  } else {
+    signal?.addEventListener("abort", handleAbort, { once: true });
+  }
   try {
     const response = await fetch(getLocalModelEndpoint("chat/completions"), {
       method: "POST",
@@ -126,10 +137,14 @@ export async function splitInterviewQuestions(transcript: string): Promise<Quest
       ? { questions, usedFallback: false }
       : createFallback(normalizedTranscript, "local_model_no_questions");
   } catch (error) {
+    if (signal?.aborted) {
+      throw error;
+    }
     const reason = error instanceof Error ? error.message : "local_model_unavailable";
     return createFallback(normalizedTranscript, reason);
   } finally {
     clearTimeout(timeout);
+    signal?.removeEventListener("abort", handleAbort);
   }
 }
 
