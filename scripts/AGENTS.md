@@ -7,8 +7,6 @@
 - `init-db.ts`：读取 `server/database/schema.sql` 并应用幂等数据库结构。
 - `ingest-knowledge.ts`：调用服务端共享的增量更新逻辑，递归同步 `knowledge-base/` 中的知识文档。
 - `start-question-model.sh`：以 loopback-only 方式启动 llama.cpp 和 Qwen3.5-2B Q4_K_M，首次运行自动下载模型。
-- `evaluate-question-rewrite.ts`：用本地 Qwen 生成固定案例的上下文改写，再通过环境变量配置的 OpenAI-compatible 模型做语义判分。
-- `question-rewrite-evaluation.ts`：测评编排与通过率计算模块；测试通过注入的改写器和裁判验证公开行为。
 
 ## 开发规范
 
@@ -20,7 +18,6 @@
 - 保持 `chunk_index = 0` 且每份文件只插入一个 `knowledge_chunks` 记录；“chunk”是遗留表名，不代表允许切分。
 - `--bm25-only` 只用于未配置阿里云时的局部验证；正常导入必须生成 1024 维向量。
 - 不打印密钥、连接串或整篇知识正文；日志只报告文件名、条目数和可操作错误。
-- 问题改写测评只读取 `OPENAI_BASE_URL`、`OPENAI_API_KEY` 和 `OPENAI_MODEL`，不读取工具专属配置；不得打印凭据，阈值和超时也由项目环境变量控制。
 
 ## 修改后验证
 

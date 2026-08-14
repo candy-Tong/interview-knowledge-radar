@@ -31,6 +31,10 @@ DASHSCOPE_API_KEY=由开发者填写
 DASHSCOPE_WORKSPACE_ID=由开发者填写
 DASHSCOPE_REGION=cn-beijing
 DASHSCOPE_EMBEDDING_MODEL=text-embedding-v4
+DASHSCOPE_RERANK_MODEL=qwen3-rerank
+RERANK_CANDIDATE_LIMIT=5
+RERANK_MIN_INTERVAL_MS=1000
+RERANK_TIMEOUT_MS=8000
 DASHSCOPE_TRANSLATION_MODEL=qwen3.5-livetranslate-flash-realtime
 DASHSCOPE_ASR_MODEL=qwen3-asr-flash-realtime
 
@@ -77,9 +81,13 @@ npm start
 
 生产页面为 `http://127.0.0.1:8787`。
 
-## 问题改写 LLM 测评
+## 测试与模型评测的边界
 
-固定案例位于 `evals/question-rewrite-cases.json`。每个案例包含最近的面试官轮次、当前追问和语义预期。
+`npm test` 只运行确定性的 Vitest 测试，使用注入依赖或 mock 验证排序、失败回退、节流和编排，不访问真实 LLM。所有会访问真实本地模型、百炼或独立裁判的质量评测都放在 `evals/`，只通过显式 `npm run eval:*` 命令运行。
+
+## 问题改写 LLM 评测
+
+固定案例位于 `evals/question-rewrite/cases.json`。每个案例包含最近的面试官轮次、当前追问和语义预期。
 
 测评采用两个模型角色：
 
@@ -108,6 +116,21 @@ npm run eval:question-rewrite
 
 新增或修复问题改写行为时，先在数据集中加入能复现问题的案例，再调整 prompt 或实现。预期描述语义，不要求某个唯一措辞。
 
+## 检索质量 LLM 评测
+
+固定问题位于 `evals/retrieval/cases.json`。`npm run eval:retrieval` 会真实执行 BM25、pgvector 和百炼重排序，再把 Top 2 的有界相关摘录交给 `OPENAI_MODEL` 独立判断意图覆盖度和相关性。
+
+```dotenv
+RETRIEVAL_EVAL_MIN_PASS_RATE=0.8
+RETRIEVAL_EVAL_TIMEOUT_MS=120000
+```
+
+```bash
+npm run eval:retrieval
+```
+
+该命令要求 PostgreSQL 索引、百炼配置和 OpenAI-compatible 裁判都可用；通过率不足、检索失败或裁判不可用都会返回非零退出码。
+
 ## 测试、构建与审查
 
 提交前至少运行：
@@ -116,6 +139,7 @@ npm run eval:question-rewrite
 npm test
 npm run build
 npm run eval:question-rewrite
+npm run eval:retrieval
 ```
 
 单独验证实时链路：
@@ -137,5 +161,5 @@ npm run db:ingest
 
 - 不提交 `.env`、`runtime-logs/`、模型服务配置或任何密钥。
 - 问题改写只向 `127.0.0.1` 的本地模型发送最近三轮面试官原文。
-- LLM 测评会把固定测评案例和本地模型生成的改写发送给 `OPENAI_BASE_URL`；不要在固定案例中放真实面试内容、候选人隐私或公司机密。
+- LLM 评测会把固定案例、问题改写或 Top 2 有界摘录发送给 `OPENAI_BASE_URL`；不要在固定案例中放真实面试内容、候选人隐私或公司机密。
 - 系统音频授权必须由用户在 Chrome 中确认，自动化测试不得绕过授权。

@@ -39,6 +39,8 @@ app.get("/api/health", async (_request, response) => {
     asrModel: config.DASHSCOPE_ASR_MODEL,
     translationModel: config.DASHSCOPE_TRANSLATION_MODEL,
     embeddingModel: config.DASHSCOPE_EMBEDDING_MODEL,
+    rerankModel: config.DASHSCOPE_RERANK_MODEL,
+    rerankMinimumIntervalMs: config.RERANK_MIN_INTERVAL_MS,
   });
 });
 

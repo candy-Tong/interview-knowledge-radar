@@ -27,12 +27,12 @@
 - 本地模型返回当前 turn 中可定位的原句 `text`、语义判断 `needsContext`，以及从最近三轮逐字复制的最小 `contextSpans`。服务端从源文本回取展示原句，并验证每个历史片段；只有 `needsContext=true` 且片段全部可定位时才组合 `retrievalQuery`，否则回退当前 turn。禁止依靠特定语言的停用词或寒暄词枚举。
 - `retrievalQuery` 同时用于草稿 BM25 和最终 hybrid；本地模型失败时两者都安全回退到当前问题原文。
 - 草稿拆题中，已稳定的前缀问题不随后续 ASR 反复改写，只允许最后一题增长；最终 turn 可做完整校正。
-- 说话中每个问题只调用本地 BM25；5 秒 flush 后每个最终问题调用混合检索。不等待翻译事件。
+- 说话中每个问题先调用本地 BM25 候选，5 秒 flush 后调用混合候选；两者的百炼 rerank 全局最多每秒启动一次，最终问题优先且不等待翻译事件。
 - 拆题和问题检索各自使用版本号抑制过期响应；相同问题在同一检索阶段必须去重。
 - 翻译 item 通过 `previous_item_id` 映射回 source item，再映射到逻辑 turn。
 - 会话结束时先 flush 当前轮，等待所有拆题和检索 settled，再通知前端结束。
 - 每个会话生成独立 `sessionId`；partial、完整 ASR 片段、翻译片段、最终 turn、展示问题、改写后的检索 query、改写耗时/回退状态、命中知识与错误都写入运行日志。
-- 检索完成日志包含 rank、知识 id/sourceName/heading、BM25/vector/hybrid 分数、相关句偏移和相关文本，不重复写入完整知识正文。
+- 检索完成日志包含 rank、知识 id/sourceName/heading、BM25/vector/hybrid 分数、rerank 状态/耗时/得分/Token、相关句偏移和相关文本，不重复写入完整知识正文。
 
 修改上述状态机时必须保留这些性质，避免一个问题产生多行、重复查询或无节制搜索。
 

@@ -40,7 +40,7 @@
 - 一个 5 秒 turn 可包含多个独立问题；本地 Qwen3.5-2B 通过 llama.cpp 提取当前原话中的问题，并从最近三轮面试官原文中只返回缺失的最小指代上下文；每个问题独立绑定最多两条知识。
 - UI 展示从当前 turn 原文定位并回取的原句问题；本地模型显式判断 `needsContext`，并只返回可在历史原文中定位的上下文片段。服务端验证当前问题和每个历史片段后才组合成 `retrievalQuery`，供 BM25 与 hybrid 检索使用。不得用语言专用停用词表清理问题；历史轮次只能补全指代，不能替代当前问题或注入不存在的项目。
 - 连续语音只有静音超过 5 秒才形成新的面试官行；说话过程中用增量原文节流拆题和刷新同一行的 BM25 知识，ASR 完成后立即用完整原文校准草稿，不等待翻译。
-- 说话中的问题草稿只做本地 BM25 召回；turn 最终确定后，每个问题再做一次 BM25 + pgvector 混合检索。
+- 说话中的问题草稿先做本地 BM25 候选召回；turn 最终确定后，每个问题做 BM25 + pgvector 混合候选召回。两种候选都经百炼 rerank 选出 Top 2，云端请求全局最多每秒一次，最终问题优先，失败时保留基础顺序。
 - 实时识别、翻译、合并后的问题和知识召回明细写入本地按日 JSONL 运行日志，使用 `sessionId`/`turnId` 关联以供复盘；日志目录不得提交 Git。
 - 面试页保持单屏三栏；页面本身不横向或纵向滚动，转写区和知识正文区可独立纵向滚动。
 - 点击历史面试官语句或其 Q1/Q2 问题时，切换到对应问题绑定的两条知识。
@@ -93,7 +93,7 @@ npm run dev
 - 新增 WebSocket 入口时保持路径白名单和 loopback Origin 校验。
 - 所有 SQL 值使用参数化查询；结构性 SQL 必须可审查且避免拼接用户输入。
 - 不扩大 `HOST=127.0.0.1` 的默认监听范围，除非用户明确要求并理解局域网暴露风险。
-- 音频按当前模式发送给阿里云 LiveTranslate 或 Qwen3-ASR；问题拆分和上下文改写只访问 loopback 的 llama.cpp；完整知识和最终改写 query 会用于阿里云向量生成。固定问题改写测评及改写结果会发送给 `.env` 配置的 OpenAI-compatible LLM 进行判分，测评数据不得包含真实面试隐私。变更数据流时同步更新隐私说明。
+- 音频按当前模式发送给阿里云 LiveTranslate 或 Qwen3-ASR；问题拆分和上下文改写只访问 loopback 的 llama.cpp；完整知识和最终改写 query 会用于阿里云向量生成。草稿/最终 query 及候选知识的有界片段会发送给百炼 rerank。`evals/` 中固定问题、改写结果或 Top 2 有界摘录会发送给 `.env` 配置的 OpenAI-compatible LLM 判分；测评数据不得包含真实面试隐私。变更数据流时同步更新隐私说明。
 - 运行日志含面试识别原文、翻译、查询和召回知识元数据，属于敏感本地数据；不得记录 API Key、Authorization、数据库凭据，也不得自动上传或提交。
 
 ## 验证要求
@@ -111,5 +111,6 @@ npm run build
 - 知识导入/检索：`npm run db:ingest`，再检查 `/api/knowledge/stats`、`/api/knowledge` 和 `/api/search`。
 - 实时协议：运行 `server/realtime/translation-proxy.test.ts`，确认两种模式选择正确上游、普通模式无翻译事件、复合 turn 拆为多问题且每题独立召回、跨 turn 追问使用上一轮项目补全后的 query、草稿 BM25 先于最终 hybrid、过期结果不会覆盖新结果，并且相邻 ASR 片段只产生一行。
 - 问题改写：本地模型启动后运行 `npm run eval:question-rewrite`，由 `.env` 中 `OPENAI_*` 指定的 LLM 裁判验证上下文、意图保持和无幻觉，通过率不得低于配置阈值。
+- 检索重排序：数据库索引可用时运行 `npm run eval:retrieval`，真实执行候选召回、百炼 rerank 和独立 LLM 裁判；普通 `npm test` 不得访问真实模型。
 - 前端布局：在 Chrome 中确认页面 `scrollWidth/scrollHeight` 不超过视口，内部滚动区仍可滚动。
 - 音频链路：必须由真实用户手势触发共享权限；不要用自动化绕过浏览器授权。

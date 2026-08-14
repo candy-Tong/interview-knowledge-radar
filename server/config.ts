@@ -9,6 +9,10 @@ const envSchema = z.object({
   DASHSCOPE_WORKSPACE_ID: z.string().optional(),
   DASHSCOPE_REGION: z.enum(["cn-beijing", "ap-southeast-1"]).default("cn-beijing"),
   DASHSCOPE_EMBEDDING_MODEL: z.string().default("text-embedding-v4"),
+  DASHSCOPE_RERANK_MODEL: z.string().default("qwen3-rerank"),
+  RERANK_CANDIDATE_LIMIT: z.coerce.number().int().min(3).max(30).default(5),
+  RERANK_MIN_INTERVAL_MS: z.coerce.number().int().min(100).default(1_000),
+  RERANK_TIMEOUT_MS: z.coerce.number().int().positive().default(8_000),
   DASHSCOPE_TRANSLATION_MODEL: z
     .string()
     .default("qwen3.5-livetranslate-flash-realtime"),
@@ -21,6 +25,8 @@ const envSchema = z.object({
   OPENAI_MODEL: z.string().min(1).optional(),
   QUESTION_REWRITE_EVAL_MIN_PASS_RATE: z.coerce.number().min(0).max(1).default(0.8),
   QUESTION_REWRITE_EVAL_TIMEOUT_MS: z.coerce.number().int().positive().default(120_000),
+  RETRIEVAL_EVAL_MIN_PASS_RATE: z.coerce.number().min(0).max(1).default(0.8),
+  RETRIEVAL_EVAL_TIMEOUT_MS: z.coerce.number().int().positive().default(120_000),
   HOST: z.string().default("127.0.0.1"),
   PORT: z.coerce.number().int().positive().default(8787),
   RUNTIME_LOG_DIR: z.string().min(1).default("runtime-logs"),

@@ -2,13 +2,13 @@ import "dotenv/config";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
-import { config } from "../server/config.js";
-import { splitInterviewQuestions } from "../server/realtime/question-splitter.js";
+import { config } from "../../server/config.js";
+import { splitInterviewQuestions } from "../../server/realtime/question-splitter.js";
 import {
   runQuestionRewriteEvaluation,
   type QuestionRewriteJudgment,
   type QuestionRewriteSample,
-} from "./question-rewrite-evaluation.js";
+} from "./evaluation.js";
 
 const evaluationCasesSchema = z.array(z.object({
   id: z.string().min(1),
@@ -113,7 +113,7 @@ Scores range from 1 (bad) to 5 (fully correct). hallucinationScore 5 means no ha
 /** Runs the checked-in benchmark against the configured rewriter and LLM judge. */
 async function main() {
   const cases = evaluationCasesSchema.parse(JSON.parse(
-    await readFile(join(process.cwd(), "evals", "question-rewrite-cases.json"), "utf8"),
+    await readFile(join(process.cwd(), "evals", "question-rewrite", "cases.json"), "utf8"),
   ));
   const result = await runQuestionRewriteEvaluation(
     cases,

@@ -7,6 +7,7 @@ import {
   searchKnowledge,
   searchKnowledgeBm25,
 } from "../knowledge/search.js";
+import { RerankPriority } from "../knowledge/rerank.js";
 import {
   type RuntimeLogEntry,
   type RuntimeLogWriter,
@@ -299,7 +300,14 @@ export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}
     ) {
       try {
         const retrievalMode = isFinal ? "hybrid" : "bm25";
-        const results = await (isFinal ? search : draftSearch)(query, maximumKnowledgeResults);
+        const results = await (isFinal ? search : draftSearch)(
+          query,
+          maximumKnowledgeResults,
+          {
+            rerankKey: questionId,
+            rerankPriority: isFinal ? RerankPriority.Final : RerankPriority.Draft,
+          },
+        );
         if (retrievalVersionByQuestion.get(questionId) !== version) {
           void logRuntimeEvent("knowledge.retrieval.discarded", {
             turnId: itemId,
@@ -327,6 +335,11 @@ export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}
             bm25Score: result.bm25Score,
             vectorScore: result.vectorScore,
             hybridScore: result.hybridScore,
+            rerankStatus: result.rerank?.status ?? "not_requested",
+            rerankModel: result.rerank?.model,
+            rerankScore: result.rerank?.score,
+            rerankDurationMs: result.rerank?.durationMs,
+            rerankTotalTokens: result.rerank?.totalTokens,
             focusStart: result.focusStart,
             focusEnd: result.focusEnd,
             focusText: result.content.slice(result.focusStart, result.focusEnd),

@@ -35,6 +35,13 @@ export type KnowledgeResult = {
   hybridScore: number;
   focusStart: number;
   focusEnd: number;
+  rerank?: {
+    status: "applied" | "skipped" | "failed" | "superseded";
+    durationMs: number;
+    model: string;
+    score?: number;
+    totalTokens?: number;
+  };
 };
 
 export type InterviewQuestion = {
@@ -64,6 +71,8 @@ export type ServiceHealth = {
   asrModel: string;
   translationModel: string;
   embeddingModel: string;
+  rerankModel: string;
+  rerankMinimumIntervalMs: number;
 };
 
 export type KnowledgeStats = {

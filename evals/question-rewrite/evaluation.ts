@@ -1,7 +1,7 @@
 import type {
   InterviewQuestion,
   QuestionSplitResult,
-} from "../server/realtime/question-splitter.js";
+} from "../../server/realtime/question-splitter.js";
 
 export type QuestionRewriteEvaluationCase = {
   id: string;

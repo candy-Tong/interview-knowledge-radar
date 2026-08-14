@@ -8,7 +8,7 @@
 - Node.js 在 `127.0.0.1:8787` 提供静态页面、REST API 和 WebSocket 代理。
 - llama.cpp 在 `127.0.0.1:18080` 运行 Qwen3.5-2B，把一轮识别拆成独立问题，并用最近三轮面试官原文补全检索 query 的项目与指代。
 - Docker 中的 PostgreSQL + pgvector 在 `localhost:54329` 保存完整知识、BM25 词项和向量。
-- Node.js 使用服务端 `.env` 中的凭据访问阿里云实时翻译、实时 ASR 和 embedding 接口。
+- Node.js 使用服务端 `.env` 中的凭据访问阿里云实时翻译、实时 ASR、embedding 和 rerank 接口。
 
 部署完成后，用户访问 `http://127.0.0.1:8787`。所有命令均从项目根目录执行。
 
@@ -58,7 +58,7 @@
 | Docker Compose | v2，使用 `docker compose` | 管理数据库容器和数据卷 |
 | Chrome | 最新稳定版 | 系统音频共享与页面运行 |
 | llama.cpp | 当前稳定版 `llama-server` | 本地 Qwen3.5-2B 问题拆分 |
-| 阿里云百炼 | API Key、Workspace ID | 实时翻译、实时 ASR 和 1024 维 embedding |
+| 阿里云百炼 | API Key、Workspace ID | 实时翻译、实时 ASR、1024 维 embedding 和候选重排序 |
 
 阿里云 Workspace 与 `DASHSCOPE_REGION` 必须属于同一地域。当前配置只接受：
 
@@ -119,6 +119,10 @@ DASHSCOPE_API_KEY=由用户填写
 DASHSCOPE_WORKSPACE_ID=由用户填写
 DASHSCOPE_REGION=cn-beijing
 DASHSCOPE_EMBEDDING_MODEL=text-embedding-v4
+DASHSCOPE_RERANK_MODEL=qwen3-rerank
+RERANK_CANDIDATE_LIMIT=5
+RERANK_MIN_INTERVAL_MS=1000
+RERANK_TIMEOUT_MS=8000
 DASHSCOPE_TRANSLATION_MODEL=qwen3.5-livetranslate-flash-realtime
 DASHSCOPE_ASR_MODEL=qwen3-asr-flash-realtime
 HOST=127.0.0.1
@@ -129,7 +133,7 @@ LOCAL_QUESTION_MODEL=qwen3.5-2b
 LOCAL_QUESTION_MODEL_TIMEOUT_MS=6000
 ```
 
-`OPENAI_*` 和 `QUESTION_REWRITE_EVAL_*` 测评变量只在开发者执行 LLM 语义测评时需要，不是生产服务启动条件；配置方法见 `CONTRIBUTING.md`。
+`OPENAI_*`、`QUESTION_REWRITE_EVAL_*` 和 `RETRIEVAL_EVAL_*` 只在开发者显式执行 LLM 质量评测时需要，不是生产服务启动条件；配置方法见 `CONTRIBUTING.md`。
 
 不要把真实值粘贴到聊天、日志、README 或部署报告。Agent 可以运行下面的检查；该命令只输出缺失的变量名，不输出变量值：
 

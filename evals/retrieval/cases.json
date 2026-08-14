@@ -1,0 +1,7 @@
+[
+  {
+    "id": "final-round-introduction-leadership-complaint-agent",
+    "query": "Please introduce yourself briefly for this final round, focusing on your front-end leadership and why the customer complaint agent is the project you most want to discuss.",
+    "expectation": "The Top 2 collectively support a concise English self-introduction, concrete front-end leadership experience, and a reason the Finance Intelligent Customer Complaint Agent is the strongest project to discuss. A generic complaint background alone is insufficient."
+  }
+]

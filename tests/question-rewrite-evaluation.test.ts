@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { runQuestionRewriteEvaluation } from "./question-rewrite-evaluation.js";
+import { runQuestionRewriteEvaluation } from "../evals/question-rewrite/evaluation.js";
 
 describe("runQuestionRewriteEvaluation", () => {
   it("reports failed cases and compares the LLM pass rate with the threshold", async () => {

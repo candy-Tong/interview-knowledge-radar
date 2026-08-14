@@ -1,5 +1,11 @@
 import { databasePool } from "../database/client.js";
+import { config } from "../config.js";
 import { createEmbeddings } from "./embedding.js";
+import {
+  knowledgeRerankScheduler,
+  RerankPriority,
+  rerankKnowledgeCandidates,
+} from "./rerank.js";
 import { locateRelevantPassage, tokenizeEnglish } from "./text.js";
 
 export type KnowledgeResult = {
@@ -12,11 +18,42 @@ export type KnowledgeResult = {
   hybridScore: number;
   focusStart: number;
   focusEnd: number;
+  rerank?: {
+    status: "applied" | "skipped" | "failed" | "superseded";
+    durationMs: number;
+    model: string;
+    score?: number;
+    totalTokens?: number;
+  };
 };
 
 type StoredKnowledgeResult = Omit<KnowledgeResult, "focusStart" | "focusEnd">;
 
 export const maximumKnowledgeResults = 2;
+
+export type KnowledgeSearchOptions = {
+  rerankKey?: string;
+  rerankPriority?: RerankPriority;
+};
+
+/** Applies the globally throttled cloud reranker to a larger base candidate set. */
+function rerankResults(
+  query: string,
+  candidates: KnowledgeResult[],
+  limit: number,
+  options: KnowledgeSearchOptions,
+) {
+  if (!config.DASHSCOPE_API_KEY || !config.DASHSCOPE_WORKSPACE_ID) {
+    return rerankKnowledgeCandidates(query, candidates, limit);
+  }
+  return knowledgeRerankScheduler.schedule({
+    key: options.rerankKey ?? `interactive:${query}:${Date.now()}`,
+    priority: options.rerankPriority ?? RerankPriority.Interactive,
+    query,
+    candidates,
+    limit,
+  });
+}
 
 /** Adds the relevant-passage offsets shared by lexical and hybrid retrieval. */
 function addRelevantPassages(rows: StoredKnowledgeResult[], query: string) {
@@ -151,6 +188,7 @@ LIMIT $2;
 export async function searchKnowledgeBm25(
   query: string,
   limit = maximumKnowledgeResults,
+  options: KnowledgeSearchOptions = {},
 ) {
   const terms = tokenizeEnglish(query);
   if (terms.length === 0) {
@@ -159,13 +197,22 @@ export async function searchKnowledgeBm25(
   const resultLimit = Math.min(Math.max(limit, 1), maximumKnowledgeResults);
   const result = await databasePool.query<StoredKnowledgeResult>(bm25OnlySearchSql, [
     terms,
-    resultLimit,
+    config.RERANK_CANDIDATE_LIMIT,
   ]);
-  return addRelevantPassages(result.rows, query);
+  return rerankResults(
+    query,
+    addRelevantPassages(result.rows, query),
+    resultLimit,
+    options,
+  );
 }
 
 /** Searches the local knowledge base with BM25 plus pgvector, falling back to BM25 when unconfigured. */
-export async function searchKnowledge(query: string, limit = maximumKnowledgeResults) {
+export async function searchKnowledge(
+  query: string,
+  limit = maximumKnowledgeResults,
+  options: KnowledgeSearchOptions = {},
+) {
   const terms = tokenizeEnglish(query);
   if (terms.length === 0) {
     return [];
@@ -176,7 +223,7 @@ export async function searchKnowledge(query: string, limit = maximumKnowledgeRes
     process.env.DASHSCOPE_API_KEY && process.env.DASHSCOPE_WORKSPACE_ID,
   );
   if (!hasEmbeddingConfig) {
-    return searchKnowledgeBm25(query, resultLimit);
+    return searchKnowledgeBm25(query, resultLimit, options);
   }
 
   const [embedding] = await createEmbeddings([query]);
@@ -184,7 +231,12 @@ export async function searchKnowledge(query: string, limit = maximumKnowledgeRes
   const result = await databasePool.query<StoredKnowledgeResult>(hybridSearchSql, [
     terms,
     vectorLiteral,
-    resultLimit,
+    config.RERANK_CANDIDATE_LIMIT,
   ]);
-  return addRelevantPassages(result.rows, query);
+  return rerankResults(
+    query,
+    addRelevantPassages(result.rows, query),
+    resultLimit,
+    options,
+  );
 }
