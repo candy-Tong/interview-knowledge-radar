@@ -19,12 +19,12 @@ export type KnowledgeResult = {
   focusStart: number;
   focusEnd: number;
   rerank?: {
-    status: "applied" | "skipped" | "failed" | "superseded";
+    status: "applied" | "skipped" | "failed" | "superseded" | "cancelled";
     durationMs: number;
     model: string;
     score?: number;
     totalTokens?: number;
-    error?: string;
+    failureCode?: "upstream_error" | "invalid_response" | "timeout" | "cancelled" | "scheduler_error";
   };
 };
 
@@ -35,6 +35,7 @@ export const maximumKnowledgeResults = 2;
 export type KnowledgeSearchOptions = {
   rerankKey?: string;
   rerankPriority?: RerankPriority;
+  signal?: AbortSignal;
 };
 
 /** Applies the globally throttled cloud reranker to a larger base candidate set. */
@@ -53,6 +54,7 @@ function rerankResults(
     query,
     candidates,
     limit,
+    signal: options.signal,
   });
 }
 

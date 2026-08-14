@@ -240,6 +240,7 @@ export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}
     const retrievalVersionByQuestion = new Map<string, number>();
     const lastRetrievalByQuestion = new Map<string, string>();
     const recentInterviewerTurns: string[] = [];
+    const retrievalController = new AbortController();
     let isUpstreamReady = false;
     let activeTurnId = "";
     let sourceParts: string[] = [];
@@ -306,6 +307,7 @@ export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}
           {
             rerankKey: questionId,
             rerankPriority: isFinal ? RerankPriority.Final : RerankPriority.Draft,
+            signal: retrievalController.signal,
           },
         );
         if (retrievalVersionByQuestion.get(questionId) !== version) {
@@ -340,7 +342,7 @@ export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}
             rerankScore: result.rerank?.score,
             rerankDurationMs: result.rerank?.durationMs,
             rerankTotalTokens: result.rerank?.totalTokens,
-            rerankError: result.rerank?.error,
+            rerankFailureCode: result.rerank?.failureCode,
             focusStart: result.focusStart,
             focusEnd: result.focusEnd,
             focusText: result.content.slice(result.focusStart, result.focusEnd),
@@ -892,6 +894,7 @@ export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}
     browserSocket.on("close", () => {
       clearTurnFlushTimer();
       clearProgressiveSearchTimer();
+      retrievalController.abort();
       queuedQuestionAnalysisByTurn.clear();
       for (const task of activeQuestionAnalysisByTurn.values()) {
         task.controller.abort();

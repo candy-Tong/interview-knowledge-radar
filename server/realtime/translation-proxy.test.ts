@@ -531,6 +531,7 @@ describe("translation proxy", () => {
     const firstSearchBlocked = new Promise<void>((resolve) => {
       releaseFirstSearch = resolve;
     });
+    let retrievalSignal: AbortSignal | undefined;
 
     upstreamServer.on("connection", (socket) => {
       openSockets.push(socket);
@@ -564,7 +565,8 @@ describe("translation proxy", () => {
       upstreamUrl: `ws://127.0.0.1:${upstreamPort}`,
       apiKey: "test-key",
       progressiveSearchIntervalMs: 0,
-      search: async (query) => {
+      search: async (query, _limit, options) => {
+        retrievalSignal = options?.signal;
         if (query === "Tell me about monorepo") {
           await firstSearchBlocked;
         }
@@ -617,6 +619,10 @@ describe("translation proxy", () => {
           event.type === "knowledge.results" && event.query === "Tell me about monorepo",
       ),
     ).toBe(false);
+    browserSocket.close();
+    await once(browserSocket, "close");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(retrievalSignal?.aborted).toBe(true);
   });
 
   it("coalesces rapid partial transcripts without overlapping question split calls", async () => {

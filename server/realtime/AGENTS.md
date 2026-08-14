@@ -40,6 +40,7 @@
 
 - 上游未 ready 前最多缓存 250 个音频块，超过上限丢弃最旧数据，禁止无限增长。
 - 浏览器断开时取消 timer 并关闭上游；上游异常要向浏览器发送明确错误。
+- 浏览器断开时还必须中止活动 rerank 并从全局队列移除该会话的待执行任务；正常 `session.finish` 仍等待检索完成。
 - 正常结束时等待当前检索和日志写入完成；日志失败只能输出不含敏感值的错误摘要，不能打断实时会话。
 - API Key 只放在上游 WebSocket Authorization header。
 - Upgrade 只允许 `/api/realtime` 和本地可信 Origin；无 Origin 用于本地非浏览器测试。

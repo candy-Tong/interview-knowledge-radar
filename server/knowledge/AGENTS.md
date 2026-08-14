@@ -20,12 +20,12 @@
 
 ## 实现规范
 
-- 云端错误要保留可操作的服务端信息，但不得记录 Authorization 内容。
+- 云端错误只通过稳定失败码进入 API 和结构化日志，不得透传原始上游消息或记录 Authorization 内容。
 - rerank 请求全局启动间隔不得小于 `RERANK_MIN_INTERVAL_MS`，且配置值不得低于 1000ms；最终问题优先于排队草稿，同一问题的新草稿可替换旧草稿。
 - SQL 结果类型与前端 `KnowledgeResult` 契约同步；数据库行类型不包含派生的 focus 字段。
 - 不把混合分数描述成概率；UI 只显示原始相关性信号。
 - 文本规则变化必须补充 `text.test.ts`；云端 embedding 使用 mock 测试，单元测试不依赖真实密钥。
-- 重排序测试使用 mock fetch 和 fake timer；真实检索质量由 `evals/retrieval/` 的 LLM 评测负责。
+- 重排序测试使用 mock fetch 和 fake timer，覆盖排序、回退、节流、草稿替换、取消和执行器异常；真实检索质量由 `evals/retrieval/` 的 LLM 评测负责。
 
 ## 验证
 

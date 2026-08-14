@@ -160,7 +160,7 @@ npm run db:ingest:bm25
 - `translation.partial` / `translation.segment.completed`：增量及完整翻译片段。
 - `recognition.turn.final`：5 秒规则合并后的最终原文和翻译。
 - `question.split.*`：当前 turn、版本、耗时、展示问题、改写后的 `retrievalQuery` 和是否回退原文。
-- `knowledge.retrieval.*`：`questionId`、BM25/hybrid 阶段、基础分数，以及 rerank 状态、耗时、相对得分和 Token。
+- `knowledge.retrieval.*`：`questionId`、BM25/hybrid 阶段、基础分数，以及 rerank 状态、稳定失败码、耗时、相对得分和 Token。
 - `session.*` / `speech.*`：会话生命周期、语音起止和错误。
 
 可以用下面的命令查看最近记录：

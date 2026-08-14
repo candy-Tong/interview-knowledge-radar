@@ -13,13 +13,12 @@ export type RerankRequest = {
   query: string;
   candidates: KnowledgeResult[];
   limit: number;
+  signal?: AbortSignal;
 };
 
 type RerankResponse = {
   results?: Array<{ index?: number; relevance_score?: number }>;
   usage?: { total_tokens?: number };
-  error?: { message?: string };
-  message?: string;
 };
 
 type RerankRequestOptions = {
@@ -28,6 +27,7 @@ type RerankRequestOptions = {
   model?: string;
   timeoutMs?: number;
   fetcher?: typeof fetch;
+  signal?: AbortSignal;
 };
 
 type RerankSchedulerOptions = {
@@ -39,6 +39,7 @@ type QueuedRerank = {
   sequence: number;
   request: RerankRequest;
   resolve: (results: KnowledgeResult[]) => void;
+  removeAbortListener: () => void;
 };
 
 const maximumRerankDocumentCharacters = 2_500;
@@ -49,11 +50,11 @@ function withRerankMetadata(
   status: NonNullable<KnowledgeResult["rerank"]>["status"],
   durationMs: number,
   model: string,
-  error?: string,
+  failureCode?: NonNullable<KnowledgeResult["rerank"]>["failureCode"],
 ): KnowledgeResult[] {
   return candidates.map((candidate) => ({
     ...candidate,
-    rerank: { status, durationMs, model, error },
+    rerank: { status, durationMs, model, failureCode },
   }));
 }
 
@@ -83,6 +84,15 @@ export async function rerankKnowledgeCandidates(
   const apiKey = options.apiKey ?? config.DASHSCOPE_API_KEY;
   const httpOrigin = options.httpOrigin ?? getDashScopeHttpOrigin();
   const model = options.model ?? config.DASHSCOPE_RERANK_MODEL;
+  if (options.signal?.aborted) {
+    return withRerankMetadata(
+      candidates.slice(0, resultLimit),
+      "cancelled",
+      0,
+      model,
+      "cancelled",
+    );
+  }
   if (!apiKey || !httpOrigin) {
     return withRerankMetadata(candidates.slice(0, resultLimit), "skipped", 0, model);
   }
@@ -93,12 +103,15 @@ export async function rerankKnowledgeCandidates(
     () => controller.abort(),
     options.timeoutMs ?? config.RERANK_TIMEOUT_MS,
   );
+  let failureCode: NonNullable<KnowledgeResult["rerank"]>["failureCode"] = "upstream_error";
   try {
     const response = await (options.fetcher ?? fetch)(
       `${httpOrigin}/compatible-api/v1/reranks`,
       {
         method: "POST",
-        signal: controller.signal,
+        signal: options.signal
+          ? AbortSignal.any([controller.signal, options.signal])
+          : controller.signal,
         headers: {
           Authorization: `Bearer ${apiKey}`,
           "Content-Type": "application/json",
@@ -114,11 +127,12 @@ export async function rerankKnowledgeCandidates(
     );
     const payload = (await response.json()) as RerankResponse;
     if (!response.ok) {
-      throw new Error(payload.error?.message ?? payload.message ?? `Rerank HTTP ${response.status}`);
+      throw new Error("Rerank upstream rejected the request.");
     }
     const ranked = payload.results;
-    if (!ranked || ranked.length === 0) {
-      throw new Error("Rerank response contained no ranked results.");
+    if (!ranked || ranked.length < resultLimit) {
+      failureCode = "invalid_response";
+      throw new Error("Rerank response contained too few ranked results.");
     }
     const seen = new Set<number>();
     const durationMs = Date.now() - startedAt;
@@ -132,6 +146,7 @@ export async function rerankKnowledgeCandidates(
         || seen.has(index)
         || typeof item.relevance_score !== "number"
       ) {
+        failureCode = "invalid_response";
         throw new Error("Rerank response contained an invalid candidate index or score.");
       }
       seen.add(index);
@@ -147,13 +162,15 @@ export async function rerankKnowledgeCandidates(
       };
     });
     return results.slice(0, resultLimit);
-  } catch (error) {
+  } catch {
+    const wasCancelled = options.signal?.aborted === true;
+    const wasTimedOut = !wasCancelled && controller.signal.aborted;
     return withRerankMetadata(
       candidates.slice(0, resultLimit),
-      "failed",
+      wasCancelled ? "cancelled" : "failed",
       Date.now() - startedAt,
       model,
-      error instanceof Error ? error.message : "Rerank request failed.",
+      wasCancelled ? "cancelled" : wasTimedOut ? "timeout" : failureCode,
     );
   } finally {
     clearTimeout(timeout);
@@ -172,7 +189,15 @@ export function createKnowledgeRerankScheduler(options: RerankSchedulerOptions) 
     queue.sort((left, right) => (
       right.request.priority - left.request.priority || left.sequence - right.sequence
     ));
-    return queue.shift();
+    const task = queue.shift();
+    task?.removeAbortListener();
+    return task;
+  }
+
+  /** Resolves a queued task exactly once and releases its abort listener. */
+  function settle(task: QueuedRerank, results: KnowledgeResult[]) {
+    task.removeAbortListener();
+    task.resolve(results);
   }
 
   function pump() {
@@ -195,7 +220,7 @@ export function createKnowledgeRerankScheduler(options: RerankSchedulerOptions) 
           "failed",
           0,
           config.DASHSCOPE_RERANK_MODEL,
-          "Rerank scheduler execution failed.",
+          "scheduler_error",
         )))
         .finally(() => {
           active = false;
@@ -207,6 +232,16 @@ export function createKnowledgeRerankScheduler(options: RerankSchedulerOptions) 
   return {
     schedule(request: RerankRequest) {
       return new Promise<KnowledgeResult[]>((resolve) => {
+        if (request.signal?.aborted) {
+          resolve(withRerankMetadata(
+            request.candidates.slice(0, request.limit),
+            "cancelled",
+            0,
+            config.DASHSCOPE_RERANK_MODEL,
+            "cancelled",
+          ));
+          return;
+        }
         if (request.priority === RerankPriority.Draft) {
           const pendingIndex = queue.findIndex((task) => (
             task.request.key === request.key
@@ -214,7 +249,7 @@ export function createKnowledgeRerankScheduler(options: RerankSchedulerOptions) 
           ));
           if (pendingIndex >= 0) {
             const [superseded] = queue.splice(pendingIndex, 1);
-            superseded.resolve(withRerankMetadata(
+            settle(superseded, withRerankMetadata(
               superseded.request.candidates.slice(0, superseded.request.limit),
               "superseded",
               0,
@@ -229,7 +264,7 @@ export function createKnowledgeRerankScheduler(options: RerankSchedulerOptions) 
               && pending.request.priority === RerankPriority.Draft
             ) {
               queue.splice(index, 1);
-              pending.resolve(withRerankMetadata(
+              settle(pending, withRerankMetadata(
                 pending.request.candidates.slice(0, pending.request.limit),
                 "superseded",
                 0,
@@ -238,7 +273,33 @@ export function createKnowledgeRerankScheduler(options: RerankSchedulerOptions) 
             }
           }
         }
-        queue.push({ request, resolve, sequence: sequence += 1 });
+        let task: QueuedRerank;
+        const handleAbort = () => {
+          const pendingIndex = queue.indexOf(task);
+          if (pendingIndex < 0) {
+            return;
+          }
+          queue.splice(pendingIndex, 1);
+          settle(task, withRerankMetadata(
+            request.candidates.slice(0, request.limit),
+            "cancelled",
+            0,
+            config.DASHSCOPE_RERANK_MODEL,
+            "cancelled",
+          ));
+          if (!active && timer && queue.length === 0) {
+            clearTimeout(timer);
+            timer = undefined;
+          }
+        };
+        task = {
+          request,
+          resolve,
+          sequence: sequence += 1,
+          removeAbortListener: () => request.signal?.removeEventListener("abort", handleAbort),
+        };
+        request.signal?.addEventListener("abort", handleAbort, { once: true });
+        queue.push(task);
         pump();
       });
     },
@@ -251,5 +312,6 @@ export const knowledgeRerankScheduler = createKnowledgeRerankScheduler({
     request.query,
     request.candidates,
     request.limit,
+    { signal: request.signal },
   ),
 });

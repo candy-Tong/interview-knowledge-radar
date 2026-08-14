@@ -77,7 +77,51 @@ describe("rerankKnowledgeCandidates", () => {
 
     expect(results.map((result) => result.id)).toEqual(["a", "b"]);
     expect(results.every((result) => result.rerank?.status === "failed")).toBe(true);
-    expect(results[0].rerank?.error).toBe("busy");
+    expect(results[0].rerank?.failureCode).toBe("upstream_error");
+  });
+
+  it("falls back when the model returns fewer results than requested", async () => {
+    const candidates = [candidate("a"), candidate("b"), candidate("c")];
+    const results = await rerankKnowledgeCandidates("query", candidates, 2, {
+      apiKey: "test-key",
+      httpOrigin: "https://workspace.example",
+      model: "qwen3-rerank",
+      fetcher: async () => new Response(JSON.stringify({
+        results: [{ index: 2, relevance_score: 0.9 }],
+      }), { status: 200 }),
+    });
+
+    expect(results.map((result) => result.id)).toEqual(["a", "b"]);
+    expect(results[0].rerank).toMatchObject({
+      status: "failed",
+      failureCode: "invalid_response",
+    });
+  });
+
+  it("cancels an active cloud request through the caller signal", async () => {
+    const controller = new AbortController();
+    const request = rerankKnowledgeCandidates("query", [candidate("a")], 1, {
+      apiKey: "test-key",
+      httpOrigin: "https://workspace.example",
+      model: "qwen3-rerank",
+      signal: controller.signal,
+      fetcher: async (_url, init) => new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          reject(new DOMException("cancelled", "AbortError"));
+        }, { once: true });
+      }),
+    });
+
+    controller.abort();
+    await expect(request).resolves.toEqual([
+      expect.objectContaining({
+        id: "a",
+        rerank: expect.objectContaining({
+          status: "cancelled",
+          failureCode: "cancelled",
+        }),
+      }),
+    ]);
   });
 });
 
@@ -131,5 +175,132 @@ describe("createKnowledgeRerankScheduler", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     await expect(queuedDraft).resolves.toEqual([expect.objectContaining({ id: "draft-2" })]);
     expect(starts[2]).toEqual({ key: "turn-2-q1", at: 2_000 });
+  });
+
+  it("removes an aborted queued request without executing it", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    let releaseFirst: () => void = () => undefined;
+    const firstBlocked = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const starts: string[] = [];
+    const scheduler = createKnowledgeRerankScheduler({
+      minimumIntervalMs: 1_000,
+      execute: async (request) => {
+        starts.push(request.key);
+        if (request.key === "active") {
+          await firstBlocked;
+        }
+        return request.candidates.slice(0, request.limit);
+      },
+    });
+    const active = scheduler.schedule({
+      key: "active",
+      priority: RerankPriority.Draft,
+      query: "active",
+      candidates: [candidate("active")],
+      limit: 1,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    const controller = new AbortController();
+    const queued = scheduler.schedule({
+      key: "queued",
+      priority: RerankPriority.Draft,
+      query: "queued",
+      candidates: [candidate("queued")],
+      limit: 1,
+      signal: controller.signal,
+    });
+
+    controller.abort();
+    await expect(queued).resolves.toEqual([
+      expect.objectContaining({
+        id: "queued",
+        rerank: expect.objectContaining({ status: "cancelled" }),
+      }),
+    ]);
+    releaseFirst();
+    await active;
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(starts).toEqual(["active"]);
+  });
+
+  it("replaces an older queued draft with the latest draft for the same key", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    let releaseActive: () => void = () => undefined;
+    const activeBlocked = new Promise<void>((resolve) => {
+      releaseActive = resolve;
+    });
+    const starts: string[] = [];
+    const scheduler = createKnowledgeRerankScheduler({
+      minimumIntervalMs: 1_000,
+      execute: async (request) => {
+        starts.push(request.query);
+        if (request.key === "active") {
+          await activeBlocked;
+        }
+        return request.candidates.slice(0, request.limit);
+      },
+    });
+    const active = scheduler.schedule({
+      key: "active",
+      priority: RerankPriority.Draft,
+      query: "active",
+      candidates: [candidate("active")],
+      limit: 1,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    const oldDraft = scheduler.schedule({
+      key: "same-question",
+      priority: RerankPriority.Draft,
+      query: "old draft",
+      candidates: [candidate("old")],
+      limit: 1,
+    });
+    const latestDraft = scheduler.schedule({
+      key: "same-question",
+      priority: RerankPriority.Draft,
+      query: "latest draft",
+      candidates: [candidate("latest")],
+      limit: 1,
+    });
+
+    await expect(oldDraft).resolves.toEqual([
+      expect.objectContaining({ rerank: expect.objectContaining({ status: "superseded" }) }),
+    ]);
+    releaseActive();
+    await active;
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(latestDraft).resolves.toEqual([expect.objectContaining({ id: "latest" })]);
+    expect(starts).toEqual(["active", "latest draft"]);
+  });
+
+  it("resolves with a stable failure code when the scheduler executor rejects", async () => {
+    vi.useFakeTimers();
+    const scheduler = createKnowledgeRerankScheduler({
+      minimumIntervalMs: 1_000,
+      execute: async () => {
+        throw new Error("secret provider detail");
+      },
+    });
+    const request = scheduler.schedule({
+      key: "failure",
+      priority: RerankPriority.Final,
+      query: "query",
+      candidates: [candidate("a")],
+      limit: 1,
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(request).resolves.toEqual([
+      expect.objectContaining({
+        rerank: expect.objectContaining({
+          status: "failed",
+          failureCode: "scheduler_error",
+        }),
+      }),
+    ]);
   });
 });
