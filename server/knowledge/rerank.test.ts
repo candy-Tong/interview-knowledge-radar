@@ -126,12 +126,12 @@ describe("rerankKnowledgeCandidates", () => {
 });
 
 describe("createKnowledgeRerankScheduler", () => {
-  it("starts at most once per second and gives a final request priority over drafts", async () => {
+  it("starts at most once every two seconds and gives a final request priority over drafts", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     const starts: Array<{ key: string; at: number }> = [];
     const scheduler = createKnowledgeRerankScheduler({
-      minimumIntervalMs: 1_000,
+      minimumIntervalMs: 2_000,
       execute: async (request) => {
         starts.push({ key: request.key, at: Date.now() });
         return request.candidates.slice(0, request.limit);
@@ -162,19 +162,19 @@ describe("createKnowledgeRerankScheduler", () => {
       limit: 1,
     });
 
-    await vi.advanceTimersByTimeAsync(999);
+    await vi.advanceTimersByTimeAsync(1_999);
     expect(starts).toEqual([{ key: "turn-1-q1", at: 0 }]);
     await vi.advanceTimersByTimeAsync(1);
     await expect(firstDraft).resolves.toHaveLength(1);
     await expect(final).resolves.toEqual([expect.objectContaining({ id: "final" })]);
     expect(starts).toEqual([
       { key: "turn-1-q1", at: 0 },
-      { key: "turn-1-q1", at: 1_000 },
+      { key: "turn-1-q1", at: 2_000 },
     ]);
 
-    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(2_000);
     await expect(queuedDraft).resolves.toEqual([expect.objectContaining({ id: "draft-2" })]);
-    expect(starts[2]).toEqual({ key: "turn-2-q1", at: 2_000 });
+    expect(starts[2]).toEqual({ key: "turn-2-q1", at: 4_000 });
   });
 
   it("removes an aborted queued request without executing it", async () => {

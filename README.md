@@ -10,7 +10,7 @@ Interview Knowledge Radar 是本地优先的实时面试辅助工具。Chrome �
 - **本地复合问题拆分**：llama.cpp 运行 Qwen3.5-2B Q4_K_M，一轮中的多个问题分别绑定自己的知识结果。
 - **语言无关的上下文补全**：模型定位当前原句和最近三轮中的最小历史原文片段，服务端逐项验证并组合检索 query；不依赖英语停用词表，无法在源文本定位的内容会安全回退。
 - **说话中提前检索**：增量原文经本地拆题后立即召回 BM25 候选，不等待中文翻译完成；5 秒定稿后再做混合候选召回。
-- **语义重排序**：BM25/hybrid 先取 5 条完整知识候选，再由百炼 `qwen3-rerank` 选出 Top 2；云端调用全局最多每秒一次，最终问题优先，失败时保留基础召回顺序。
+- **语义重排序**：BM25/hybrid 先取 5 条完整知识候选，再由百炼 `qwen3-rerank` 选出 Top 2；云端调用全局最多每 2 秒一次，最终问题优先，失败时保留基础召回顺序。
 - **完整知识展示**：一份知识源 Markdown 对应一条知识，正文不切分。
 - **相关句定位**：长知识自动滚动到与识别问题最相关的句子，并保留全文滚动能力。
 - **历史问题切换**：点击左侧任意面试官语句，切换到该问题绑定的检索结果。
@@ -134,7 +134,7 @@ npm run db:ingest:bm25
 | `DASHSCOPE_EMBEDDING_MODEL` | `text-embedding-v4` | 1024 维向量模型 |
 | `DASHSCOPE_RERANK_MODEL` | `qwen3-rerank` | BM25/hybrid 候选重排序模型 |
 | `RERANK_CANDIDATE_LIMIT` | `5` | 送入重排序的基础候选数，范围 3–30 |
-| `RERANK_MIN_INTERVAL_MS` | `1000`，不可低于 1000 | 全局云端 rerank 请求的最小启动间隔 |
+| `RERANK_MIN_INTERVAL_MS` | `2000`，不可低于 2000 | 全局云端 rerank 请求的最小启动间隔 |
 | `RERANK_TIMEOUT_MS` | `8000` | 单次 rerank 超时，失败后回退基础顺序 |
 | `LOCAL_QUESTION_MODEL_URL` | `http://127.0.0.1:18080/v1` | llama.cpp OpenAI-compatible 地址 |
 | `LOCAL_QUESTION_MODEL` | `qwen3.5-2b` | 本地模型 alias |
