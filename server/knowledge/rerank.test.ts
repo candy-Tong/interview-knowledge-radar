@@ -77,6 +77,7 @@ describe("rerankKnowledgeCandidates", () => {
 
     expect(results.map((result) => result.id)).toEqual(["a", "b"]);
     expect(results.every((result) => result.rerank?.status === "failed")).toBe(true);
+    expect(results[0].rerank?.error).toBe("busy");
   });
 });
 

@@ -11,7 +11,7 @@ const envSchema = z.object({
   DASHSCOPE_EMBEDDING_MODEL: z.string().default("text-embedding-v4"),
   DASHSCOPE_RERANK_MODEL: z.string().default("qwen3-rerank"),
   RERANK_CANDIDATE_LIMIT: z.coerce.number().int().min(3).max(30).default(5),
-  RERANK_MIN_INTERVAL_MS: z.coerce.number().int().min(100).default(1_000),
+  RERANK_MIN_INTERVAL_MS: z.coerce.number().int().min(1_000).default(1_000),
   RERANK_TIMEOUT_MS: z.coerce.number().int().positive().default(8_000),
   DASHSCOPE_TRANSLATION_MODEL: z
     .string()

@@ -24,6 +24,7 @@ export type KnowledgeResult = {
     model: string;
     score?: number;
     totalTokens?: number;
+    error?: string;
   };
 };
 

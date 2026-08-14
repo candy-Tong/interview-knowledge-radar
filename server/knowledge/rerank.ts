@@ -49,10 +49,11 @@ function withRerankMetadata(
   status: NonNullable<KnowledgeResult["rerank"]>["status"],
   durationMs: number,
   model: string,
+  error?: string,
 ): KnowledgeResult[] {
   return candidates.map((candidate) => ({
     ...candidate,
-    rerank: { status, durationMs, model },
+    rerank: { status, durationMs, model, error },
   }));
 }
 
@@ -146,12 +147,13 @@ export async function rerankKnowledgeCandidates(
       };
     });
     return results.slice(0, resultLimit);
-  } catch {
+  } catch (error) {
     return withRerankMetadata(
       candidates.slice(0, resultLimit),
       "failed",
       Date.now() - startedAt,
       model,
+      error instanceof Error ? error.message : "Rerank request failed.",
     );
   } finally {
     clearTimeout(timeout);
@@ -193,6 +195,7 @@ export function createKnowledgeRerankScheduler(options: RerankSchedulerOptions) 
           "failed",
           0,
           config.DASHSCOPE_RERANK_MODEL,
+          "Rerank scheduler execution failed.",
         )))
         .finally(() => {
           active = false;

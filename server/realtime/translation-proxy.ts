@@ -340,6 +340,7 @@ export function createRealtimeWebSocketServer(options: RealtimeProxyOptions = {}
             rerankScore: result.rerank?.score,
             rerankDurationMs: result.rerank?.durationMs,
             rerankTotalTokens: result.rerank?.totalTokens,
+            rerankError: result.rerank?.error,
             focusStart: result.focusStart,
             focusEnd: result.focusEnd,
             focusText: result.content.slice(result.focusStart, result.focusEnd),

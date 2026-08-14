@@ -21,7 +21,7 @@
 ## 实现规范
 
 - 云端错误要保留可操作的服务端信息，但不得记录 Authorization 内容。
-- rerank 请求全局启动间隔不得小于 `RERANK_MIN_INTERVAL_MS`；最终问题优先于排队草稿，同一问题的新草稿可替换旧草稿。
+- rerank 请求全局启动间隔不得小于 `RERANK_MIN_INTERVAL_MS`，且配置值不得低于 1000ms；最终问题优先于排队草稿，同一问题的新草稿可替换旧草稿。
 - SQL 结果类型与前端 `KnowledgeResult` 契约同步；数据库行类型不包含派生的 focus 字段。
 - 不把混合分数描述成概率；UI 只显示原始相关性信号。
 - 文本规则变化必须补充 `text.test.ts`；云端 embedding 使用 mock 测试，单元测试不依赖真实密钥。

@@ -134,7 +134,7 @@ npm run db:ingest:bm25
 | `DASHSCOPE_EMBEDDING_MODEL` | `text-embedding-v4` | 1024 维向量模型 |
 | `DASHSCOPE_RERANK_MODEL` | `qwen3-rerank` | BM25/hybrid 候选重排序模型 |
 | `RERANK_CANDIDATE_LIMIT` | `5` | 送入重排序的基础候选数，范围 3–30 |
-| `RERANK_MIN_INTERVAL_MS` | `1000` | 全局云端 rerank 请求的最小启动间隔 |
+| `RERANK_MIN_INTERVAL_MS` | `1000`，不可低于 1000 | 全局云端 rerank 请求的最小启动间隔 |
 | `RERANK_TIMEOUT_MS` | `8000` | 单次 rerank 超时，失败后回退基础顺序 |
 | `LOCAL_QUESTION_MODEL_URL` | `http://127.0.0.1:18080/v1` | llama.cpp OpenAI-compatible 地址 |
 | `LOCAL_QUESTION_MODEL` | `qwen3.5-2b` | 本地模型 alias |
